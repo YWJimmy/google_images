@@ -169,6 +169,7 @@ class GoogleImagesBrowser:
         target_url = self._build_url(keyword)
         if self.cfg.search_navigation == "direct":
             self.page.goto(target_url, wait_until="domcontentloaded")
+            self.page.wait_for_timeout(self.cfg.results_load_wait_ms)
             return target_url, None
 
         self.page.goto(self.cfg.images_home_url, wait_until="domcontentloaded")
@@ -184,7 +185,68 @@ class GoogleImagesBrowser:
         search_box.fill(keyword)
         search_box.press("Enter")
         self.page.wait_for_load_state("domcontentloaded", timeout=self.cfg.navigation_timeout_ms)
+        self.page.wait_for_timeout(self.cfg.results_load_wait_ms)
         return target_url, landing_url
+
+    def result_dom_summary(self) -> dict[str, object]:
+        """Return aggregate DOM counts without exposing result URLs or page text."""
+        if not self.page:
+            return {}
+        try:
+            return self.page.locator("a[href]").evaluate_all(
+                r"""anchors => {
+                    const out = {total_anchors: anchors.length, anchors_with_images: 0,
+                                 external_anchors: 0, imgres_anchors: 0,
+                                 url_redirect_anchors: 0, search_anchors: 0,
+                                 anchor_attribute_names: {}, image_attribute_names: {},
+                                 goto_url_param_count: 0, goto_absolute_url_count: 0,
+                                 goto_relative_path_count: 0,
+                                 goto_non_url_token_count: 0,
+                                 goto_nested_query_key_count: 0};
+                    const bump = (obj, key) => { obj[key] = (obj[key] || 0) + 1; };
+                    for (const anchor of anchors) {
+                        const image = anchor.querySelector('img');
+                        if (image) {
+                            out.anchors_with_images++;
+                            for (const attr of anchor.attributes) bump(out.anchor_attribute_names, attr.name);
+                            for (const attr of image.attributes) bump(out.image_attribute_names, attr.name);
+                        }
+                        let parsed;
+                        try { parsed = new URL(anchor.href); } catch (_) { continue; }
+                        const host = parsed.hostname.toLowerCase();
+                        const isGoogle = host === 'google.com' || host.endsWith('.google.com');
+                        if (!isGoogle) out.external_anchors++;
+                        if (parsed.pathname.includes('imgres')) out.imgres_anchors++;
+                        if (parsed.pathname === '/url') out.url_redirect_anchors++;
+                        if (parsed.pathname === '/search') out.search_anchors++;
+                        if (parsed.pathname === '/goto') {
+                            const value = parsed.searchParams.get('url');
+                            if (value) {
+                                out.goto_url_param_count++;
+                                try {
+                                    const target = new URL(value);
+                                    out.goto_absolute_url_count++;
+                                } catch (_) {}
+                                try {
+                                    const nested = new URL(value, location.origin);
+                                    const isAbsolute = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
+                                    const nestedKeyCount = Array.from(nested.searchParams.keys()).length;
+                                    if (!isAbsolute) {
+                                        out.goto_relative_path_count++;
+                                    }
+                                    if (!isAbsolute && nestedKeyCount === 0) {
+                                        out.goto_non_url_token_count++;
+                                    }
+                                    out.goto_nested_query_key_count += nestedKeyCount;
+                                } catch (_) {}
+                            }
+                        }
+                    }
+                    return out;
+                }"""
+            )
+        except Exception:
+            return {}
 
     def _visible_body_text(self) -> str:
         try:
@@ -408,6 +470,7 @@ class GoogleImagesBrowser:
                 "navigation_error": navigation_error,
                 "challenge_detected": state == "challenge",
                 "consent_detected": state == "consent",
+                "result_dom_summary": self.result_dom_summary(),
             },
             "navigator": navigator,
             "session_summary": {

@@ -29,6 +29,7 @@ persist_storage_state_updates: false
 viewport_width: 1440
 viewport_height: 1000
 navigation_timeout_ms: 45000
+results_load_wait_ms: 4000
 
 # Loading the image grid. Fixed values only; not human-behavior randomization.
 max_scroll_rounds: 12

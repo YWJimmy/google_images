@@ -443,6 +443,8 @@ session_mode: "persistent_profile"
 
 诊断 JSON 会记录 `images_home_url` 和 `images_home_landing_url`，用于确认 `/ncr` 是否实际生效。该设置只能固定入口域名，不能保证消除 Google challenge。
 
+首页提交后程序默认等待 `results_load_wait_ms: 4000`，再开始检查结果 DOM。诊断 JSON 的 `result_dom_summary` 只记录链接数量分类，不保存具体结果网址或页面正文。
+
 ### 隐私边界
 
 `private/google_state.json` 包含可复用的浏览器会话信息，应视为凭据。以下路径已经被 `.gitignore` 排除：

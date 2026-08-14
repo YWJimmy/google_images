@@ -23,6 +23,7 @@ class Config:
     viewport_width: int
     viewport_height: int
     navigation_timeout_ms: int
+    results_load_wait_ms: int
     max_scroll_rounds: int
     scroll_pixels: int
     scroll_wait_ms: int
@@ -62,6 +63,7 @@ def load_config(path: str | Path) -> Config:
         viewport_width=int(raw.get("viewport_width", 1440)),
         viewport_height=int(raw.get("viewport_height", 1000)),
         navigation_timeout_ms=int(raw.get("navigation_timeout_ms", 45000)),
+        results_load_wait_ms=int(raw.get("results_load_wait_ms", 4000)),
         max_scroll_rounds=int(raw.get("max_scroll_rounds", 12)),
         scroll_pixels=int(raw.get("scroll_pixels", 1800)),
         scroll_wait_ms=int(raw.get("scroll_wait_ms", 1200)),

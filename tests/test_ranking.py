@@ -16,6 +16,20 @@ def test_direct_external():
     assert page == "https://example.com/page"
     assert image is None
 
+def test_nested_google_goto_redirect():
+    href = (
+        "https://www.google.com/goto?url="
+        "%2Furl%3Fsa%3Di%26url%3Dhttps%253A%252F%252Fexample.com%252Fsource-page"
+    )
+    page, image = extract_external_from_href(href)
+    assert page == "https://example.com/source-page"
+    assert image is None
+
+def test_nested_redirect_loop_is_bounded():
+    page, image = extract_external_from_href("https://www.google.com/goto?url=%2Fgoto%3Furl%3D%252Fgoto")
+    assert page is None
+    assert image is None
+
 def test_google_login_hint_does_not_require_cookie_values():
     assert infer_google_login({"NID", "SOCS"}) == "not_detected"
     assert infer_google_login({"NID", "__Secure-1PSID"}) == "likely_signed_in"
