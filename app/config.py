@@ -9,6 +9,9 @@ class Config:
     run_hours: float
     max_results: int
     base_url: str
+    images_home_url: str
+    search_navigation: str
+    require_google_com_host: bool
     hl: str
     gl: str
     browser_channel: str
@@ -45,6 +48,9 @@ def load_config(path: str | Path) -> Config:
         run_hours=float(raw.get("run_hours", 8)),
         max_results=int(raw.get("max_results", 100)),
         base_url=str(raw.get("base_url", "https://www.google.com/search")),
+        images_home_url=str(raw.get("images_home_url", "https://images.google.com/ncr")),
+        search_navigation=str(raw.get("search_navigation", "homepage")).strip().lower(),
+        require_google_com_host=bool(raw.get("require_google_com_host", True)),
         hl=str(raw.get("hl", "en")),
         gl=str(raw.get("gl", "us")),
         browser_channel=str(raw.get("browser_channel", "chrome")),
@@ -73,6 +79,8 @@ def load_config(path: str | Path) -> Config:
         raise ValueError("max_results must be between 1 and 100 in v1")
     if cfg.session_mode not in {"persistent_profile", "storage_state"}:
         raise ValueError("session_mode must be persistent_profile or storage_state")
+    if cfg.search_navigation not in {"homepage", "direct"}:
+        raise ValueError("search_navigation must be homepage or direct")
     if not cfg.input_csv.exists():
         raise ValueError(f"input_csv not found: {cfg.input_csv}")
     return cfg

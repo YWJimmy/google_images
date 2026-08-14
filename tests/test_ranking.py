@@ -1,5 +1,5 @@
 from app.ranking import domain_matches, extract_external_from_href
-from app.google_images import diagnostic_outcome, infer_google_login, redact_diagnostic_url
+from app.google_images import diagnostic_outcome, infer_google_login, is_expected_google_com_host, redact_diagnostic_url
 
 def test_domain_matches():
     assert domain_matches("en.wikipedia.org", "wikipedia.org", True)
@@ -31,3 +31,8 @@ def test_challenge_url_token_is_redacted():
     redacted = redact_diagnostic_url(url)
     assert "secret-token" not in redacted
     assert "%3Credacted%3E" in redacted
+
+def test_google_com_host_check_rejects_country_redirects():
+    assert is_expected_google_com_host("https://images.google.com/ncr")
+    assert is_expected_google_com_host("https://www.google.com/search")
+    assert not is_expected_google_com_host("https://images.google.com.hk/")

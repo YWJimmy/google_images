@@ -7,6 +7,10 @@ max_results: 100
 
 # Google search context
 base_url: "https://www.google.com/search"
+images_home_url: "https://images.google.com/ncr"
+# homepage opens the NCR Images entry and submits through the visible search box.
+search_navigation: "homepage"
+require_google_com_host: true
 hl: "en"
 gl: "us"
 

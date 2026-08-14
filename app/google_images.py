@@ -66,6 +66,11 @@ def diagnostic_outcome(state: str, navigation_error: str | None) -> tuple[int, s
         return -2, "NETWORK_OR_NAVIGATION_ERROR", 2
     return 0, "DIAGNOSTIC_NORMAL", 0
 
+
+def is_expected_google_com_host(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower().strip(".")
+    return host == "google.com" or host.endswith(".google.com")
+
 class ChallengeDetected(RuntimeError):
     pass
 
@@ -158,6 +163,28 @@ class GoogleImagesBrowser:
     def _build_url(self, keyword: str) -> str:
         params = {"q": keyword, "udm": "2", "hl": self.cfg.hl, "gl": self.cfg.gl}
         return self.cfg.base_url + "?" + urlencode(params)
+
+    def _navigate_to_search(self, keyword: str) -> tuple[str, str | None]:
+        """Navigate through the configured entry point and return target/landing URLs."""
+        target_url = self._build_url(keyword)
+        if self.cfg.search_navigation == "direct":
+            self.page.goto(target_url, wait_until="domcontentloaded")
+            return target_url, None
+
+        self.page.goto(self.cfg.images_home_url, wait_until="domcontentloaded")
+        landing_url = self.page.url
+        self._assert_normal_page()
+        if self.cfg.require_google_com_host and not is_expected_google_com_host(landing_url):
+            raise NavigationError(
+                f"Images home redirected outside google.com: {redact_diagnostic_url(landing_url)}"
+            )
+
+        search_box = self.page.locator('textarea[name="q"], input[name="q"]').first
+        search_box.wait_for(state="visible", timeout=10000)
+        search_box.fill(keyword)
+        search_box.press("Enter")
+        self.page.wait_for_load_state("domcontentloaded", timeout=self.cfg.navigation_timeout_ms)
+        return target_url, landing_url
 
     def _visible_body_text(self) -> str:
         try:
@@ -306,9 +333,10 @@ class GoogleImagesBrowser:
 
         chrome = self._chrome_version_details()
         target_url = self._build_url(keyword)
+        landing_url = None
         navigation_error = None
         try:
-            self.page.goto(target_url, wait_until="domcontentloaded")
+            target_url, landing_url = self._navigate_to_search(keyword)
         except Exception as exc:
             navigation_error = f"{type(exc).__name__}: {exc}"
 
@@ -369,6 +397,9 @@ class GoogleImagesBrowser:
             },
             "page": {
                 "diagnostic_keyword": keyword,
+                "search_navigation": self.cfg.search_navigation,
+                "images_home_url": self.cfg.images_home_url,
+                "images_home_landing_url": redact_diagnostic_url(landing_url) if landing_url else None,
                 "requested_url": target_url,
                 "current_url": redact_diagnostic_url(self.page.url),
                 "title": title,
@@ -410,7 +441,7 @@ class GoogleImagesBrowser:
         url = self._build_url(keyword)
         started = time.perf_counter()
         try:
-            self.page.goto(url, wait_until="domcontentloaded")
+            url, _ = self._navigate_to_search(keyword)
         except PlaywrightTimeoutError as exc:
             raise NavigationError(f"navigation timeout: {exc}") from exc
         except Exception as exc:

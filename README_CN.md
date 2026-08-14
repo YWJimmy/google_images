@@ -428,6 +428,9 @@ private/google_state.json
 session_mode: "storage_state"
 storage_state_path: "private/google_state.json"
 persist_storage_state_updates: false
+images_home_url: "https://images.google.com/ncr"
+search_navigation: "homepage"
+require_google_com_host: true
 ```
 
 `false` 表示自动搜索结束时不覆盖人工快照，避免把 challenge 状态写回。需要继续使用原有完整专用 Profile 时改回：
@@ -435,6 +438,10 @@ persist_storage_state_updates: false
 ```yaml
 session_mode: "persistent_profile"
 ```
+
+`homepage` 模式先访问 `https://images.google.com/ncr`。入口应落到 `images.google.com`；若仍落到 `images.google.com.hk` 等国家/地区域名，并且 `require_google_com_host: true`，程序会按导航错误停止。通过首页搜索框提交后，Google Images 结果页显示为 `www.google.com/search?...&udm=2` 是正常行为。
+
+诊断 JSON 会记录 `images_home_url` 和 `images_home_landing_url`，用于确认 `/ncr` 是否实际生效。该设置只能固定入口域名，不能保证消除 Google challenge。
 
 ### 隐私边界
 
