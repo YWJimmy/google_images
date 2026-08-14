@@ -1,5 +1,11 @@
 from app.ranking import domain_matches, extract_external_from_href, is_google_host
-from app.google_images import diagnostic_outcome, infer_google_login, is_expected_google_com_host, redact_diagnostic_url
+from app.google_images import (
+    diagnostic_outcome,
+    infer_google_login,
+    is_expected_google_com_host,
+    probe_href_kind,
+    redact_diagnostic_url,
+)
 
 def test_domain_matches():
     assert domain_matches("en.wikipedia.org", "wikipedia.org", True)
@@ -71,3 +77,10 @@ def test_google_com_host_check_rejects_country_redirects():
     assert is_expected_google_com_host("https://images.google.com/ncr")
     assert is_expected_google_com_host("https://www.google.com/search")
     assert not is_expected_google_com_host("https://images.google.com.hk/")
+
+def test_probe_href_kind_does_not_expose_or_require_opaque_token_contents():
+    assert probe_href_kind("https://www.google.com/goto?url=CAESopaque-token") == "google_goto_opaque_token"
+    assert probe_href_kind(
+        "https://www.google.com/goto?url=https%3A%2F%2Fexample.com%2Fpage"
+    ) == "google_goto_absolute_url"
+    assert probe_href_kind("https://example.com/page") == "other"

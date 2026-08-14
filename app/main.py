@@ -14,6 +14,8 @@ def main():
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--diagnose", action="store_true", help="capture a read-only browser environment report")
     ap.add_argument("--diagnose-keyword", default="Albert Einstein")
+    ap.add_argument("--probe-first-image", action="store_true", help="click one image and report its structure")
+    ap.add_argument("--probe-keyword", default="Albert Einstein")
     ap.add_argument("--capture-state", action="store_true", help="capture state from a manually opened Chrome")
     ap.add_argument("--cdp-endpoint", default="http://127.0.0.1:9222")
     args = ap.parse_args()
@@ -50,6 +52,26 @@ def main():
             report, path = browser.diagnose(cfg.log_dir / "diagnostics", args.diagnose_keyword)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             print(f"Diagnostic report saved to: {path}")
+            if report["process_exit_code"]:
+                raise SystemExit(report["process_exit_code"])
+        finally:
+            browser.close()
+        return
+    if args.probe_first_image:
+        browser = GoogleImagesBrowser(cfg)
+        try:
+            try:
+                browser.start()
+            except BrowserLaunchError as exc:
+                path = browser.save_launch_failure_diagnostic(cfg.log_dir / "diagnostics", exc)
+                print("Browser launch failed; a diagnostic report was still created.")
+                print(f"Diagnostic report saved to: {path}")
+                raise SystemExit(3) from None
+            report, path = browser.probe_first_image(
+                cfg.log_dir / "diagnostics", args.probe_keyword
+            )
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            print(f"Probe report saved to: {path}")
             if report["process_exit_code"]:
                 raise SystemExit(report["process_exit_code"])
         finally:

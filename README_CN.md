@@ -445,6 +445,14 @@ session_mode: "persistent_profile"
 
 首页提交后程序默认等待 `results_load_wait_ms: 4000`，再开始检查结果 DOM。诊断 JSON 的 `result_dom_summary` 只记录链接数量分类，不保存具体结果网址或页面正文。
 
+单图片结构探针只点击第一个可见的 Google Images 结果，用于判断页面产生预览面板、新标签页还是外部导航：
+
+```powershell
+python -m app.main --config config.yaml --probe-first-image --probe-keyword "Albert Einstein"
+```
+
+报告保存到 `logs/diagnostics/first_image_probe_*.json`。报告不记录搜索词、完整 URL、`goto` 令牌或 Cookie 值，只保留结构变化和规范化来源域名；探针每次只点击一张图片，遇到 challenge 或 consent 会停止。
+
 ### 隐私边界
 
 `private/google_state.json` 包含可复用的浏览器会话信息，应视为凭据。以下路径已经被 `.gitignore` 排除：

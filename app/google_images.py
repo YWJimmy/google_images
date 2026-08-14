@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import Counter
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version as package_version
 import json
@@ -9,7 +10,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 from .config import Config
 from .models import ImageItem
-from .ranking import extract_external_from_href
+from .ranking import extract_external_from_href, hostname, is_google_host
 
 # Deliberately specific phrases only. Do NOT use generic "recaptcha" substring
 # matching because normal Google pages can contain that word in non-challenge UI.
@@ -70,6 +71,26 @@ def diagnostic_outcome(state: str, navigation_error: str | None) -> tuple[int, s
 def is_expected_google_com_host(url: str) -> bool:
     host = (urlsplit(url).hostname or "").lower().strip(".")
     return host == "google.com" or host.endswith(".google.com")
+
+
+def probe_href_kind(href: str) -> str:
+    """Classify a candidate href without retaining its query value."""
+    try:
+        parts = urlsplit(href)
+        host = (parts.hostname or "").lower().strip(".")
+        if not is_google_host(host) or parts.path != "/goto":
+            return "other"
+        value = dict(parse_qsl(parts.query, keep_blank_values=True)).get("url", "")
+        if not value:
+            return "google_goto_missing_target"
+        target = urlsplit(value)
+        if target.scheme in {"http", "https"} and target.hostname:
+            return "google_goto_absolute_url"
+        if target.query:
+            return "google_goto_nested_url"
+        return "google_goto_opaque_token"
+    except Exception:
+        return "invalid"
 
 class ChallengeDetected(RuntimeError):
     pass
@@ -247,6 +268,216 @@ class GoogleImagesBrowser:
             )
         except Exception:
             return {}
+
+    @staticmethod
+    def _visible_external_domain_counts(page) -> Counter[str]:
+        """Count visible external-link domains without returning full URLs."""
+        try:
+            hrefs = page.locator("a[href]:visible").evaluate_all(
+                "anchors => anchors.map(anchor => anchor.href).filter(Boolean)"
+            )
+        except Exception:
+            return Counter()
+        domains: Counter[str] = Counter()
+        for href in hrefs:
+            domain = hostname(href)
+            if domain and not is_google_host(domain):
+                domains[domain] += 1
+        return domains
+
+    def probe_first_image(self, directory: Path, keyword: str) -> tuple[dict, Path]:
+        """Click one visible image result and report only structural/domain observations."""
+        if not self.page or not self.context:
+            raise BrowserLaunchError("browser not started")
+
+        timestamp = datetime.now().astimezone()
+        report: dict[str, object] = {
+            "generated_at": timestamp.isoformat(timespec="seconds"),
+            "purpose": "Single-image structure probe; no challenge interaction or token capture.",
+            "result_code": 0,
+            "result_type": "PROBE_PENDING",
+            "process_exit_code": 0,
+            "privacy": {
+                "keyword_recorded": False,
+                "full_urls_recorded": False,
+                "goto_token_recorded": False,
+                "cookie_values_recorded": False,
+            },
+            "probe": {
+                "candidate_found": False,
+                "candidate_href_kind": None,
+                "image_anchor_count": 0,
+                "click_succeeded": False,
+                "popup_count": 0,
+                "popup_google_owned_count": 0,
+                "popup_other_count": 0,
+                "main_page_url_changed": False,
+                "main_page_became_external": False,
+                "dom_anchor_count_changed": False,
+                "new_visible_external_domains": [],
+                "popup_external_domains": [],
+                "source_domains": [],
+                "outcome": "pending",
+            },
+        }
+
+        popup_pages = []
+        main_page = self.page
+        try:
+            self._navigate_to_search(keyword)
+            self._assert_normal_page()
+            before_summary = self.result_dom_summary()
+            before_domains = self._visible_external_domain_counts(main_page)
+            before_url = main_page.url
+
+            image_anchors = main_page.locator("a[href]:has(img)")
+            candidate = None
+            candidate_kind = None
+            candidate_count = image_anchors.count()
+            report["probe"]["image_anchor_count"] = candidate_count
+            for index in range(min(candidate_count, 300)):
+                current = image_anchors.nth(index)
+                try:
+                    href = current.evaluate("anchor => anchor.href || ''")
+                    kind = probe_href_kind(href)
+                    if kind.startswith("google_goto_") and current.is_visible():
+                        candidate = current
+                        candidate_kind = kind
+                        break
+                except Exception:
+                    continue
+
+            if candidate is None:
+                report["result_code"] = -6
+                report["result_type"] = "PROBE_IMAGE_CANDIDATE_NOT_FOUND"
+                report["process_exit_code"] = 6
+                report["probe"]["outcome"] = "no_candidate"
+                return self._write_probe_report(directory, timestamp, report)
+
+            report["probe"]["candidate_found"] = True
+            report["probe"]["candidate_href_kind"] = candidate_kind
+            existing_page_ids = {id(page) for page in self.context.pages}
+            candidate.scroll_into_view_if_needed(timeout=5000)
+            candidate.click(timeout=10000)
+            report["probe"]["click_succeeded"] = True
+            main_page.wait_for_timeout(3000)
+
+            popup_pages = [page for page in self.context.pages if id(page) not in existing_page_ids]
+            report["probe"]["popup_count"] = len(popup_pages)
+            popup_external_domains: set[str] = set()
+            popup_google_owned_count = 0
+            popup_other_count = 0
+            popup_challenge = False
+            for popup in popup_pages:
+                try:
+                    popup.wait_for_load_state(
+                        "domcontentloaded", timeout=min(self.cfg.navigation_timeout_ms, 8000)
+                    )
+                except Exception:
+                    pass
+                try:
+                    popup.wait_for_timeout(750)
+                    popup_url = popup.url or ""
+                    popup_domain = hostname(popup_url)
+                    if "/sorry/" in urlsplit(popup_url).path.lower() and is_google_host(popup_domain):
+                        popup_challenge = True
+                    if popup_domain and is_google_host(popup_domain):
+                        popup_google_owned_count += 1
+                    elif popup_domain:
+                        popup_external_domains.add(popup_domain)
+                    else:
+                        popup_other_count += 1
+                except Exception:
+                    popup_other_count += 1
+
+            main_domain = hostname(main_page.url)
+            main_became_external = bool(main_domain and not is_google_host(main_domain))
+            if not main_became_external:
+                self._assert_normal_page()
+            after_summary = self.result_dom_summary() if not main_became_external else {}
+            after_domains = (
+                self._visible_external_domain_counts(main_page)
+                if not main_became_external else Counter()
+            )
+            increased_domains = sorted(
+                domain for domain, count in after_domains.items()
+                if count > before_domains.get(domain, 0)
+            )
+            source_domains = set(increased_domains) | popup_external_domains
+            if main_became_external:
+                source_domains.add(main_domain)
+
+            report["probe"].update({
+                "popup_google_owned_count": popup_google_owned_count,
+                "popup_other_count": popup_other_count,
+                "main_page_url_changed": main_page.url != before_url,
+                "main_page_became_external": main_became_external,
+                "dom_anchor_count_changed": (
+                    before_summary.get("total_anchors") != after_summary.get("total_anchors")
+                    if after_summary else False
+                ),
+                "new_visible_external_domains": increased_domains,
+                "popup_external_domains": sorted(popup_external_domains),
+                "source_domains": sorted(source_domains),
+            })
+
+            if popup_challenge:
+                report["result_code"] = -4
+                report["result_type"] = "GOOGLE_CHALLENGE_OR_UNUSUAL_TRAFFIC"
+                report["process_exit_code"] = 4
+                report["probe"]["outcome"] = "challenge"
+            elif popup_external_domains:
+                report["result_type"] = "PROBE_POPUP_EXTERNAL_DOMAIN_FOUND"
+                report["probe"]["outcome"] = "popup_external_domain"
+            elif main_became_external:
+                report["result_type"] = "PROBE_MAIN_PAGE_EXTERNAL_DOMAIN_FOUND"
+                report["probe"]["outcome"] = "main_page_external_domain"
+            elif increased_domains:
+                report["result_type"] = "PROBE_PANEL_EXTERNAL_DOMAIN_FOUND"
+                report["probe"]["outcome"] = "panel_external_domain"
+            elif report["probe"]["dom_anchor_count_changed"]:
+                report["result_type"] = "PROBE_STRUCTURE_CHANGED_NO_DOMAIN"
+                report["probe"]["outcome"] = "structure_changed_no_domain"
+            else:
+                report["result_type"] = "PROBE_NO_OBSERVABLE_SOURCE_DOMAIN"
+                report["probe"]["outcome"] = "no_observable_source_domain"
+        except ChallengeDetected:
+            report["result_code"] = -4
+            report["result_type"] = "GOOGLE_CHALLENGE_OR_UNUSUAL_TRAFFIC"
+            report["process_exit_code"] = 4
+            report["probe"]["outcome"] = "challenge"
+        except ConsentRequired:
+            report["result_code"] = -9
+            report["result_type"] = "GOOGLE_CONSENT_REQUIRED"
+            report["process_exit_code"] = 9
+            report["probe"]["outcome"] = "consent"
+        except (NavigationError, PlaywrightTimeoutError) as exc:
+            report["result_code"] = -2
+            report["result_type"] = "NETWORK_OR_NAVIGATION_ERROR"
+            report["process_exit_code"] = 2
+            report["probe"]["outcome"] = "navigation_error"
+            report["probe"]["error_type"] = type(exc).__name__
+        except Exception as exc:
+            report["result_code"] = -6
+            report["result_type"] = "RESULT_PARSE_ERROR"
+            report["process_exit_code"] = 6
+            report["probe"]["outcome"] = "probe_error"
+            report["probe"]["error_type"] = type(exc).__name__
+        finally:
+            for popup in popup_pages:
+                try:
+                    popup.close()
+                except Exception:
+                    pass
+
+        return self._write_probe_report(directory, timestamp, report)
+
+    @staticmethod
+    def _write_probe_report(directory: Path, timestamp: datetime, report: dict) -> tuple[dict, Path]:
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / ("first_image_probe_" + timestamp.strftime("%Y%m%d_%H%M%S") + ".json")
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return report, path
 
     def _visible_body_text(self) -> str:
         try:
