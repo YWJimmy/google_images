@@ -53,7 +53,7 @@ git status --short
 git diff
 git add <文件路径>
 git diff --cached
-git commit -m "说明本次修改"
+git commit -m "feat: 简短中文摘要"
 
 # 推送工作分支
 git push -u origin feature/short-description
@@ -107,4 +107,20 @@ SSH 连接异常时可检查：
 
 ```powershell
 ssh -T git@github.com
+```
+
+## 5. 提交信息规范
+
+每次提交使用 Conventional Commits 类型和中文摘要，格式如下：
+
+```text
+<type>: <中文摘要>
+```
+
+示例：
+
+```powershell
+git commit -m "feat: 新增浏览器环境诊断模式"
+git commit -m "fix: 单独处理 Google 同意页面"
+git commit -m "docs: 补充诊断流程说明"
 ```

@@ -1,4 +1,5 @@
 from app.ranking import domain_matches, extract_external_from_href
+from app.google_images import infer_google_login
 
 def test_domain_matches():
     assert domain_matches("en.wikipedia.org", "wikipedia.org", True)
@@ -14,3 +15,7 @@ def test_direct_external():
     page, image = extract_external_from_href("https://example.com/page")
     assert page == "https://example.com/page"
     assert image is None
+
+def test_google_login_hint_does_not_require_cookie_values():
+    assert infer_google_login({"NID", "SOCS"}) == "not_detected"
+    assert infer_google_login({"NID", "__Secure-1PSID"}) == "likely_signed_in"

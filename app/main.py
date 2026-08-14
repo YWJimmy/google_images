@@ -1,6 +1,8 @@
 from __future__ import annotations
 import argparse
+import json
 from .config import load_config
+from .google_images import BrowserLaunchError, GoogleImagesBrowser
 from .runner import run
 
 
@@ -9,6 +11,8 @@ def main():
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--validate", action="store_true")
+    ap.add_argument("--diagnose", action="store_true", help="capture a read-only browser environment report")
+    ap.add_argument("--diagnose-keyword", default="Albert Einstein")
     args = ap.parse_args()
     cfg = load_config(args.config)
     if args.validate:
@@ -18,6 +22,22 @@ def main():
         print(f"interval_seconds={cfg.interval_seconds:.2f}")
         print(f"input_csv={cfg.input_csv}")
         print(f"profile_dir={cfg.profile_dir}")
+        return
+    if args.diagnose:
+        browser = GoogleImagesBrowser(cfg)
+        try:
+            try:
+                browser.start()
+            except BrowserLaunchError as exc:
+                path = browser.save_launch_failure_diagnostic(cfg.log_dir / "diagnostics", exc)
+                print("Browser launch failed; a diagnostic report was still created.")
+                print(f"Diagnostic report saved to: {path}")
+                raise SystemExit(2) from None
+            report, path = browser.diagnose(cfg.log_dir / "diagnostics", args.diagnose_keyword)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            print(f"Diagnostic report saved to: {path}")
+        finally:
+            browser.close()
         return
     run(cfg, args.limit)
 

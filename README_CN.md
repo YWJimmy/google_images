@@ -325,3 +325,47 @@ v1.1 改为只认以下明确证据：
 - 重启时调度索引按“当前剩余任务”重新计算，不再因为前面已完成任务的原始序号而额外等待数小时。
 
 因此，如果 v1 产生了 `Albert Einstein = -4`，使用 v1.1 后**不需要手工删除 SQLite 记录**；该负错误会自动成为可重试任务。
+
+---
+
+## v1.2：浏览器环境诊断模式
+
+当日常 Chrome 正常、程序专用 Profile 却进入 `/sorry/` 时，运行：
+
+```powershell
+python -m app.main --config config.yaml --diagnose
+```
+
+Windows 也可以双击：
+
+```text
+diagnose_windows.bat
+```
+
+默认使用公开测试关键词 `Albert Einstein`。如需指定其他诊断关键词：
+
+```powershell
+python -m app.main --config config.yaml --diagnose --diagnose-keyword "Albert Einstein"
+```
+
+诊断模式只访问一次 Google Images 搜索页并读取环境，不点击、不刷新、不处理验证码，也不修改浏览器指纹。报告保存在：
+
+```text
+logs/diagnostics/environment_YYYYMMDD_HHMMSS.json
+logs/diagnostics/environment_YYYYMMDD_HHMMSS.png
+logs/diagnostics/environment_YYYYMMDD_HHMMSS.txt
+```
+
+报告包括：
+
+- Chrome 与 Playwright 版本；
+- 配置的 Profile 路径及 Chrome 实际报告的 Profile 路径；
+- Chrome 实际命令行和本项目显式添加的启动参数；
+- 当前 URL、页面标题、User-Agent 与 navigator 基本信息；
+- challenge / consent 判断及理由；
+- Google Cookie 数量、LocalStorage origin/条目数量；
+- 根据常见 Google 登录 Cookie **名称**推断的登录提示。
+
+如果 Chrome 在页面打开前就退出，命令会以退出码 `2` 结束，并生成 `launch_failure_*.json`。该报告记录启动错误、沙箱配置以及可能存在的 Profile 锁文件；锁文件只是线索，不代表一定有 Chrome 进程占用。请先关闭使用程序专用 Profile 的全部 Chrome 窗口后重试，不要直接删除仍被使用的 Profile 数据。
+
+为保护隐私，报告不会保存 Cookie 值。登录提示只是诊断线索，不是对实际登录状态的证明。`logs/` 已被 `.gitignore` 排除，不应提交诊断报告；分享报告前仍应检查其中的本机 Profile 路径、Chrome 命令行和页面内容。

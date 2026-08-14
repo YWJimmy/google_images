@@ -1,4 +1,7 @@
 from __future__ import annotations
+from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version as package_version
+import json
 import time
 from pathlib import Path
 from urllib.parse import urlencode
@@ -22,6 +25,23 @@ CONSENT_TEXT = [
     "before you continue to google search",
 ]
 
+GOOGLE_LOGIN_COOKIE_NAMES = {
+    "SID", "HSID", "SSID", "APISID", "SAPISID",
+    "__Secure-1PSID", "__Secure-3PSID",
+}
+
+
+def infer_google_login(cookie_names: set[str]) -> str:
+    """Return a conservative login hint without exposing cookie values."""
+    return "likely_signed_in" if cookie_names & GOOGLE_LOGIN_COOKIE_NAMES else "not_detected"
+
+
+def _installed_version(distribution: str) -> str:
+    try:
+        return package_version(distribution)
+    except PackageNotFoundError:
+        return "unknown"
+
 class ChallengeDetected(RuntimeError):
     pass
 
@@ -40,6 +60,7 @@ class GoogleImagesBrowser:
         self.pw = None
         self.context = None
         self.page = None
+        self.launch_args = ["--disable-notifications"]
 
     def start(self):
         try:
@@ -49,8 +70,9 @@ class GoogleImagesBrowser:
                 user_data_dir=str(self.cfg.profile_dir),
                 channel=self.cfg.browser_channel,
                 headless=self.cfg.headless,
+                chromium_sandbox=True,
                 viewport={"width": self.cfg.viewport_width, "height": self.cfg.viewport_height},
-                args=["--disable-notifications"],
+                args=self.launch_args,
             )
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.page.set_default_navigation_timeout(self.cfg.navigation_timeout_ms)
@@ -142,6 +164,160 @@ class GoogleImagesBrowser:
         except Exception:
             pass
         return paths
+
+    def _chrome_version_details(self) -> dict[str, str | None]:
+        """Read Chrome's own version page; failure must not abort diagnosis."""
+        if not self.context:
+            return {"version": None, "profile_path": None, "command_line": None}
+        version_page = None
+        try:
+            version_page = self.context.new_page()
+            version_page.goto("chrome://version/", wait_until="domcontentloaded")
+
+            def value(selector: str) -> str | None:
+                try:
+                    text = version_page.locator(selector).inner_text(timeout=3000).strip()
+                    return text or None
+                except Exception:
+                    return None
+
+            return {
+                "version": value("#version"),
+                "profile_path": value("#profile_path"),
+                "command_line": value("#command_line"),
+            }
+        except Exception:
+            return {"version": None, "profile_path": None, "command_line": None}
+        finally:
+            if version_page:
+                try:
+                    version_page.close()
+                except Exception:
+                    pass
+
+    def save_launch_failure_diagnostic(self, directory: Path, error: Exception) -> Path:
+        """Persist startup failures that occur before a page can be inspected."""
+        directory.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().astimezone()
+        lock_names = ("lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket")
+        present_locks = [name for name in lock_names if (self.cfg.profile_dir / name).exists()]
+        report = {
+            "generated_at": timestamp.isoformat(timespec="seconds"),
+            "purpose": "Read-only browser environment comparison; browser launch failed.",
+            "playwright_version": _installed_version("playwright"),
+            "browser": {
+                "channel": self.cfg.browser_channel,
+                "profile_path_configured": str(self.cfg.profile_dir),
+                "headless": self.cfg.headless,
+                "chromium_sandbox": True,
+                "configured_launch_args": list(self.launch_args),
+            },
+            "launch": {
+                "succeeded": False,
+                "error_type": type(error).__name__,
+                "error": str(error),
+                "profile_lock_candidates_present": present_locks,
+                "hint": (
+                    "Close every Chrome window using the dedicated profile before retrying. "
+                    "Lock-file presence is only a clue and may be stale; it is not proof that Chrome is running."
+                ),
+            },
+            "session_summary": {
+                "cookie_values_recorded": False,
+                "page_or_session_inspected": False,
+            },
+        }
+        path = directory / ("launch_failure_" + timestamp.strftime("%Y%m%d_%H%M%S") + ".json")
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def diagnose(self, directory: Path, keyword: str = "Albert Einstein") -> tuple[dict, Path]:
+        """Capture a read-only environment report without bypassing challenges."""
+        if not self.page or not self.context:
+            raise BrowserLaunchError("browser not started")
+
+        chrome = self._chrome_version_details()
+        target_url = self._build_url(keyword)
+        navigation_error = None
+        try:
+            self.page.goto(target_url, wait_until="domcontentloaded")
+        except Exception as exc:
+            navigation_error = f"{type(exc).__name__}: {exc}"
+
+        state, reason = self._page_state()
+        try:
+            title = self.page.title()
+        except Exception:
+            title = None
+        try:
+            navigator = self.page.evaluate(
+                """() => ({
+                    userAgent: navigator.userAgent,
+                    platform: navigator.platform,
+                    language: navigator.language,
+                    languages: navigator.languages,
+                    webdriver: navigator.webdriver
+                })"""
+            )
+        except Exception:
+            navigator = {}
+
+        try:
+            google_cookies = self.context.cookies(["https://www.google.com"])
+        except Exception:
+            google_cookies = []
+        cookie_names = {str(cookie.get("name", "")) for cookie in google_cookies}
+
+        try:
+            origins = self.context.storage_state().get("origins", [])
+        except Exception:
+            origins = []
+        local_storage_entries = sum(len(origin.get("localStorage", [])) for origin in origins)
+
+        timestamp = datetime.now().astimezone()
+        report = {
+            "generated_at": timestamp.isoformat(timespec="seconds"),
+            "purpose": "Read-only browser environment comparison; no challenge interaction or bypass.",
+            "playwright_version": _installed_version("playwright"),
+            "browser": {
+                "channel": self.cfg.browser_channel,
+                "version": chrome["version"],
+                "profile_path_configured": str(self.cfg.profile_dir),
+                "profile_path_reported_by_chrome": chrome["profile_path"],
+                "headless": self.cfg.headless,
+                "chromium_sandbox": True,
+                "configured_launch_args": list(self.launch_args),
+                "command_line_reported_by_chrome": chrome["command_line"],
+            },
+            "page": {
+                "diagnostic_keyword": keyword,
+                "requested_url": target_url,
+                "current_url": self.page.url,
+                "title": title,
+                "state": state,
+                "state_reason": reason,
+                "navigation_error": navigation_error,
+                "challenge_detected": state == "challenge",
+                "consent_detected": state == "consent",
+            },
+            "navigator": navigator,
+            "session_summary": {
+                "google_cookie_count": len(google_cookies),
+                "google_login_hint": infer_google_login(cookie_names),
+                "google_login_hint_basis": "Known Google auth-cookie names only; this is not proof of login.",
+                "storage_origin_count": len(origins),
+                "local_storage_entry_count": local_storage_entries,
+                "cookie_values_recorded": False,
+            },
+        }
+
+        directory.mkdir(parents=True, exist_ok=True)
+        prefix = "environment_" + timestamp.strftime("%Y%m%d_%H%M%S")
+        report_path = directory / f"{prefix}.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        report["artifacts"] = self.save_diagnostics(directory, prefix)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return report, report_path
 
     def _assert_normal_page(self):
         state, reason = self._page_state()
