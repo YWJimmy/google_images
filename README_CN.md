@@ -368,4 +368,16 @@ logs/diagnostics/environment_YYYYMMDD_HHMMSS.txt
 
 如果 Chrome 在页面打开前就退出，命令会以退出码 `2` 结束，并生成 `launch_failure_*.json`。该报告记录启动错误、沙箱配置以及可能存在的 Profile 锁文件；锁文件只是线索，不代表一定有 Chrome 进程占用。请先关闭使用程序专用 Profile 的全部 Chrome 窗口后重试，不要直接删除仍被使用的 Profile 数据。
 
+诊断命令提供适合脚本判断的进程退出码：
+
+| 退出码 | 含义 |
+| ---: | --- |
+| `0` | 页面状态正常 |
+| `2` | 网络或导航错误 |
+| `3` | Chrome / Profile 启动错误 |
+| `4` | Google challenge / unusual traffic |
+| `9` | Google consent 页面 |
+
+JSON 同时包含 `result_code`、`result_type` 和 `process_exit_code`。为避免诊断报告携带可复用的临时信息，`/sorry/` URL 中的挑战令牌会被替换为 `<redacted>`。
+
 为保护隐私，报告不会保存 Cookie 值。登录提示只是诊断线索，不是对实际登录状态的证明。`logs/` 已被 `.gitignore` 排除，不应提交诊断报告；分享报告前仍应检查其中的本机 Profile 路径、Chrome 命令行和页面内容。

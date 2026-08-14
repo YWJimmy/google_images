@@ -32,10 +32,12 @@ def main():
                 path = browser.save_launch_failure_diagnostic(cfg.log_dir / "diagnostics", exc)
                 print("Browser launch failed; a diagnostic report was still created.")
                 print(f"Diagnostic report saved to: {path}")
-                raise SystemExit(2) from None
+                raise SystemExit(3) from None
             report, path = browser.diagnose(cfg.log_dir / "diagnostics", args.diagnose_keyword)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             print(f"Diagnostic report saved to: {path}")
+            if report["process_exit_code"]:
+                raise SystemExit(report["process_exit_code"])
         finally:
             browser.close()
         return

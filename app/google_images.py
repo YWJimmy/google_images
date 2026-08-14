@@ -4,7 +4,7 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 import json
 import time
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from .config import Config
@@ -41,6 +41,30 @@ def _installed_version(distribution: str) -> str:
         return package_version(distribution)
     except PackageNotFoundError:
         return "unknown"
+
+
+def redact_diagnostic_url(url: str) -> str:
+    """Redact opaque challenge tokens while retaining useful URL context."""
+    try:
+        parts = urlsplit(url)
+        if "/sorry/" not in parts.path.lower():
+            return url
+        query = [(key, "<redacted>" if key.lower() == "q" else value)
+                 for key, value in parse_qsl(parts.query, keep_blank_values=True)]
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    except Exception:
+        return url
+
+
+def diagnostic_outcome(state: str, navigation_error: str | None) -> tuple[int, str, int]:
+    """Return application result code, type, and process exit code."""
+    if state == "challenge":
+        return -4, "GOOGLE_CHALLENGE_OR_UNUSUAL_TRAFFIC", 4
+    if state == "consent":
+        return -9, "GOOGLE_CONSENT_REQUIRED", 9
+    if navigation_error:
+        return -2, "NETWORK_OR_NAVIGATION_ERROR", 2
+    return 0, "DIAGNOSTIC_NORMAL", 0
 
 class ChallengeDetected(RuntimeError):
     pass
@@ -114,7 +138,7 @@ class GoogleImagesBrowser:
 
         url = (self.page.url or "").lower()
         if "/sorry/" in url:
-            return "challenge", f"challenge URL: {self.page.url}"
+            return "challenge", f"challenge URL: {redact_diagnostic_url(self.page.url)}"
 
         # Visible reCAPTCHA UI is strong evidence. Merely having reCAPTCHA code or
         # hidden markup in the document is NOT considered a challenge.
@@ -245,6 +269,7 @@ class GoogleImagesBrowser:
             navigation_error = f"{type(exc).__name__}: {exc}"
 
         state, reason = self._page_state()
+        result_code, result_type, process_exit_code = diagnostic_outcome(state, navigation_error)
         try:
             title = self.page.title()
         except Exception:
@@ -278,6 +303,9 @@ class GoogleImagesBrowser:
         report = {
             "generated_at": timestamp.isoformat(timespec="seconds"),
             "purpose": "Read-only browser environment comparison; no challenge interaction or bypass.",
+            "result_code": result_code,
+            "result_type": result_type,
+            "process_exit_code": process_exit_code,
             "playwright_version": _installed_version("playwright"),
             "browser": {
                 "channel": self.cfg.browser_channel,
@@ -292,7 +320,7 @@ class GoogleImagesBrowser:
             "page": {
                 "diagnostic_keyword": keyword,
                 "requested_url": target_url,
-                "current_url": self.page.url,
+                "current_url": redact_diagnostic_url(self.page.url),
                 "title": title,
                 "state": state,
                 "state_reason": reason,
