@@ -479,9 +479,9 @@ class GoogleImagesBrowser:
         """Parse source domains from the loaded page without clicking results."""
         if not self.page:
             return []
-        candidates = self.page.locator('a[href*="/goto"]:has(img)')
+        candidates = self.page.locator('a[href]:has(img)')
         records = candidates.evaluate_all(
-            """(anchors, maxResults) => anchors.slice(0, maxResults).map(anchor => {
+            """anchors => anchors.map(anchor => {
                 const blocks = [];
                 let node = anchor;
                 for (let depth = 0; node && depth < 9; depth++, node = node.parentElement) {
@@ -491,9 +491,16 @@ class GoogleImagesBrowser:
                     if (html && html.length <= 200000) blocks.push(html);
                 }
                 return {href: anchor.href || '', blocks};
-            })""",
-            max_results,
+            })"""
         )
+        records = [
+            record for record in records
+            if (
+                (hostname(str(record.get("href", "")))
+                 and not is_google_host(hostname(str(record.get("href", "")))))
+                or probe_href_kind(str(record.get("href", ""))).startswith("google_goto_")
+            )
+        ][:max_results]
         hrefs = [str(record.get("href", "")) for record in records]
         blocks = [list(record.get("blocks", [])) for record in records]
         return parse_minimal_structured_domains(self.page.content(), hrefs, blocks)

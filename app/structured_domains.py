@@ -127,6 +127,10 @@ def parse_minimal_structured_domains(
 
     for index, href in enumerate(candidate_hrefs):
         rank = index + 1
+        direct_domain = hostname(href)
+        if direct_domain and not is_google_host(direct_domain):
+            observations.append(_classify(rank, (direct_domain,), "direct_href"))
+            continue
         token = _goto_token(href)
         script_matches: list[tuple[int, tuple[str, ...]]] = []
         if token:

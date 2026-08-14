@@ -99,6 +99,13 @@ def test_minimal_structured_parser_resolves_one_external_domain():
     assert observation.domains == ("en.wikipedia.org",)
     assert observation.method == "structured_script"
 
+def test_minimal_structured_parser_prefers_direct_external_href():
+    href = "https://www.wikipedia.org/wiki/Example"
+    observation = parse_minimal_structured_domains("<html></html>", [href])[0]
+    assert observation.status == "resolved"
+    assert observation.domains == ("wikipedia.org",)
+    assert observation.method == "direct_href"
+
 def test_minimal_structured_parser_is_fail_closed_on_ambiguous_domains():
     token = "CAES-example-two"
     href = f"https://www.google.com/goto?url={token}"
