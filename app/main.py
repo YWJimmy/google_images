@@ -4,6 +4,7 @@ import json
 from .config import load_config
 from .google_images import BrowserLaunchError, GoogleImagesBrowser
 from .runner import run
+from .state_capture import StateCaptureError, capture_google_state
 
 
 def main():
@@ -13,8 +14,19 @@ def main():
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--diagnose", action="store_true", help="capture a read-only browser environment report")
     ap.add_argument("--diagnose-keyword", default="Albert Einstein")
+    ap.add_argument("--capture-state", action="store_true", help="capture state from a manually opened Chrome")
+    ap.add_argument("--cdp-endpoint", default="http://127.0.0.1:9222")
     args = ap.parse_args()
     cfg = load_config(args.config)
+    if args.capture_state:
+        try:
+            summary = capture_google_state(args.cdp_endpoint, cfg.storage_state_path)
+        except StateCaptureError as exc:
+            print(f"State capture failed: {exc}")
+            raise SystemExit(3) from None
+        print("Google state captured without printing cookie values.")
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
     if args.validate:
         print("Configuration OK")
         print(f"daily_limit={cfg.daily_limit}")
@@ -22,6 +34,8 @@ def main():
         print(f"interval_seconds={cfg.interval_seconds:.2f}")
         print(f"input_csv={cfg.input_csv}")
         print(f"profile_dir={cfg.profile_dir}")
+        print(f"session_mode={cfg.session_mode}")
+        print(f"storage_state_path={cfg.storage_state_path}")
         return
     if args.diagnose:
         browser = GoogleImagesBrowser(cfg)

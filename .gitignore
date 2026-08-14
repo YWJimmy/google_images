@@ -28,6 +28,10 @@ htmlcov/
 
 # Browser profiles and automation artifacts (cookies, sessions, traces)
 profile/
+private/
+google_state.json
+*.storage-state.json
+*.storage_state.json
 playwright-report/
 test-results/
 blob-report/

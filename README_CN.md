@@ -380,4 +380,81 @@ logs/diagnostics/environment_YYYYMMDD_HHMMSS.txt
 
 JSON 同时包含 `result_code`、`result_type` 和 `process_exit_code`。为避免诊断报告携带可复用的临时信息，`/sorry/` URL 中的挑战令牌会被替换为 `<redacted>`。
 
+---
+
+## v1.3：导入人工 Chrome 状态
+
+该模式只复用人工 Chrome 保存的 Cookie 和 LocalStorage，不复制日常 Chrome Profile，不自动处理 CAPTCHA，也不保证 Google 不再触发验证。
+
+### 1. 打开独立的人工 Chrome
+
+双击：
+
+```text
+start_manual_state_chrome_windows.bat
+```
+
+脚本使用独立目录 `profile/manual_state_capture/` 和本地 CDP 端口 `9222`。请在这个窗口中人工打开 Google Images、处理普通 consent，并确认普通搜索可用。不要把日常 Chrome 的 User Data 路径传给脚本。
+
+如果页面是 `/sorry/`、reCAPTCHA 或 unusual traffic，请停止，不要保存当前状态。
+
+### 2. 保存人工状态
+
+保持上述 Chrome 窗口打开，双击：
+
+```text
+capture_google_state_windows.bat
+```
+
+也可以运行：
+
+```powershell
+python -m app.main --config config.yaml --capture-state --cdp-endpoint http://127.0.0.1:9222
+```
+
+捕获器会检查 Google 页面状态。发现 challenge 或 consent 时退出且不写文件；正常时保存到：
+
+```text
+private/google_state.json
+```
+
+控制台只显示 Cookie 和 origin 的数量，不输出 Cookie 名称、值、具体页面 URL 或搜索词。
+
+### 3. 切换会话模式
+
+确认状态文件生成后，在本地 `config.yaml` 中设置：
+
+```yaml
+session_mode: "storage_state"
+storage_state_path: "private/google_state.json"
+persist_storage_state_updates: false
+```
+
+`false` 表示自动搜索结束时不覆盖人工快照，避免把 challenge 状态写回。需要继续使用原有完整专用 Profile 时改回：
+
+```yaml
+session_mode: "persistent_profile"
+```
+
+### 隐私边界
+
+`private/google_state.json` 包含可复用的浏览器会话信息，应视为凭据。以下路径已经被 `.gitignore` 排除：
+
+```text
+private/
+google_state.json
+*.storage-state.json
+*.storage_state.json
+profile/
+```
+
+提交前仍应运行：
+
+```powershell
+git check-ignore -v private\google_state.json profile\manual_state_capture
+git status --ignored --short
+```
+
+不要通过聊天、邮件或公开仓库分享状态 JSON。若状态文件意外泄露，应删除文件、退出相关 Google 会话，并在 Google 账号中检查活动会话。
+
 为保护隐私，报告不会保存 Cookie 值。登录提示只是诊断线索，不是对实际登录状态的证明。`logs/` 已被 `.gitignore` 排除，不应提交诊断报告；分享报告前仍应检查其中的本机 Profile 路径、Chrome 命令行和页面内容。

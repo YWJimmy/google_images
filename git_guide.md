@@ -69,7 +69,7 @@ git branch -d feature/short-description
 
 ## 3. 隐私与密钥检查
 
-以下内容只应保留在本机：`config.yaml`、`.env*`、浏览器 `profile/`、日志、运行输出、SQLite 数据库和私有关键词表。公开配置应写入 `config.example.yaml`，不要把真实凭据填入示例文件。
+以下内容只应保留在本机：`config.yaml`、`.env*`、浏览器 `profile/`、`private/`、`google_state.json`、`*.storage-state.json`、日志、运行输出、SQLite 数据库和私有关键词表。公开配置应写入 `config.example.yaml`，不要把真实凭据填入示例文件。
 
 ```powershell
 # 查看忽略文件及其命中的规则

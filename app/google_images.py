@@ -82,22 +82,40 @@ class GoogleImagesBrowser:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.pw = None
+        self.browser = None
         self.context = None
         self.page = None
         self.launch_args = ["--disable-notifications"]
 
     def start(self):
         try:
-            self.cfg.profile_dir.mkdir(parents=True, exist_ok=True)
             self.pw = sync_playwright().start()
-            self.context = self.pw.chromium.launch_persistent_context(
-                user_data_dir=str(self.cfg.profile_dir),
-                channel=self.cfg.browser_channel,
-                headless=self.cfg.headless,
-                chromium_sandbox=True,
-                viewport={"width": self.cfg.viewport_width, "height": self.cfg.viewport_height},
-                args=self.launch_args,
-            )
+            if self.cfg.session_mode == "storage_state":
+                if not self.cfg.storage_state_path.is_file():
+                    raise FileNotFoundError(
+                        f"storage state not found: {self.cfg.storage_state_path}; "
+                        "capture it manually before using session_mode=storage_state"
+                    )
+                self.browser = self.pw.chromium.launch(
+                    channel=self.cfg.browser_channel,
+                    headless=self.cfg.headless,
+                    chromium_sandbox=True,
+                    args=self.launch_args,
+                )
+                self.context = self.browser.new_context(
+                    storage_state=str(self.cfg.storage_state_path),
+                    viewport={"width": self.cfg.viewport_width, "height": self.cfg.viewport_height},
+                )
+            else:
+                self.cfg.profile_dir.mkdir(parents=True, exist_ok=True)
+                self.context = self.pw.chromium.launch_persistent_context(
+                    user_data_dir=str(self.cfg.profile_dir),
+                    channel=self.cfg.browser_channel,
+                    headless=self.cfg.headless,
+                    chromium_sandbox=True,
+                    viewport={"width": self.cfg.viewport_width, "height": self.cfg.viewport_height},
+                    args=self.launch_args,
+                )
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.page.set_default_navigation_timeout(self.cfg.navigation_timeout_ms)
             self.page.set_default_timeout(10000)
@@ -107,9 +125,24 @@ class GoogleImagesBrowser:
             raise BrowserLaunchError(str(exc)) from exc
 
     def close(self):
+        if (
+            self.context
+            and self.cfg.session_mode == "storage_state"
+            and self.cfg.persist_storage_state_updates
+        ):
+            try:
+                self.cfg.storage_state_path.parent.mkdir(parents=True, exist_ok=True)
+                self.context.storage_state(path=str(self.cfg.storage_state_path))
+            except Exception:
+                pass
         try:
             if self.context:
                 self.context.close()
+        except Exception:
+            pass
+        try:
+            if self.browser:
+                self.browser.close()
         except Exception:
             pass
         try:
@@ -119,6 +152,7 @@ class GoogleImagesBrowser:
             pass
         self.page = None
         self.context = None
+        self.browser = None
         self.pw = None
 
     def _build_url(self, keyword: str) -> str:
@@ -183,7 +217,8 @@ class GoogleImagesBrowser:
             txt = directory / f"{safe}.txt"
             title = self.page.title()
             body = self._visible_body_text()[:12000]
-            txt.write_text(f"URL: {self.page.url}\nTITLE: {title}\n\nVISIBLE BODY:\n{body}\n", encoding="utf-8")
+            safe_url = redact_diagnostic_url(self.page.url)
+            txt.write_text(f"URL: {safe_url}\nTITLE: {title}\n\nVISIBLE BODY:\n{body}\n", encoding="utf-8")
             paths.append(str(txt))
         except Exception:
             pass
@@ -224,14 +259,23 @@ class GoogleImagesBrowser:
         directory.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().astimezone()
         lock_names = ("lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket")
-        present_locks = [name for name in lock_names if (self.cfg.profile_dir / name).exists()]
+        present_locks = (
+            [name for name in lock_names if (self.cfg.profile_dir / name).exists()]
+            if self.cfg.session_mode == "persistent_profile" else []
+        )
         report = {
             "generated_at": timestamp.isoformat(timespec="seconds"),
             "purpose": "Read-only browser environment comparison; browser launch failed.",
             "playwright_version": _installed_version("playwright"),
             "browser": {
                 "channel": self.cfg.browser_channel,
-                "profile_path_configured": str(self.cfg.profile_dir),
+                "session_mode": self.cfg.session_mode,
+                "profile_path_configured": (
+                    str(self.cfg.profile_dir) if self.cfg.session_mode == "persistent_profile" else None
+                ),
+                "storage_state_path_configured": (
+                    str(self.cfg.storage_state_path) if self.cfg.session_mode == "storage_state" else None
+                ),
                 "headless": self.cfg.headless,
                 "chromium_sandbox": True,
                 "configured_launch_args": list(self.launch_args),
@@ -310,7 +354,13 @@ class GoogleImagesBrowser:
             "browser": {
                 "channel": self.cfg.browser_channel,
                 "version": chrome["version"],
-                "profile_path_configured": str(self.cfg.profile_dir),
+                "session_mode": self.cfg.session_mode,
+                "profile_path_configured": (
+                    str(self.cfg.profile_dir) if self.cfg.session_mode == "persistent_profile" else None
+                ),
+                "storage_state_path_configured": (
+                    str(self.cfg.storage_state_path) if self.cfg.session_mode == "storage_state" else None
+                ),
                 "profile_path_reported_by_chrome": chrome["profile_path"],
                 "headless": self.cfg.headless,
                 "chromium_sandbox": True,

@@ -13,7 +13,10 @@ class Config:
     gl: str
     browser_channel: str
     headless: bool
+    session_mode: str
     profile_dir: Path
+    storage_state_path: Path
+    persist_storage_state_updates: bool
     viewport_width: int
     viewport_height: int
     navigation_timeout_ms: int
@@ -46,7 +49,10 @@ def load_config(path: str | Path) -> Config:
         gl=str(raw.get("gl", "us")),
         browser_channel=str(raw.get("browser_channel", "chrome")),
         headless=bool(raw.get("headless", False)),
+        session_mode=str(raw.get("session_mode", "persistent_profile")).strip().lower(),
         profile_dir=(base / raw.get("profile_dir", "profile/google_profile")).resolve(),
+        storage_state_path=(base / raw.get("storage_state_path", "private/google_state.json")).resolve(),
+        persist_storage_state_updates=bool(raw.get("persist_storage_state_updates", False)),
         viewport_width=int(raw.get("viewport_width", 1440)),
         viewport_height=int(raw.get("viewport_height", 1000)),
         navigation_timeout_ms=int(raw.get("navigation_timeout_ms", 45000)),
@@ -65,6 +71,8 @@ def load_config(path: str | Path) -> Config:
         raise ValueError("daily_limit and run_hours must be > 0")
     if not (1 <= cfg.max_results <= 100):
         raise ValueError("max_results must be between 1 and 100 in v1")
+    if cfg.session_mode not in {"persistent_profile", "storage_state"}:
+        raise ValueError("session_mode must be persistent_profile or storage_state")
     if not cfg.input_csv.exists():
         raise ValueError(f"input_csv not found: {cfg.input_csv}")
     return cfg
