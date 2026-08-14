@@ -296,3 +296,32 @@ C:\你的目录\google_images_local_v1\run_daily_windows.bat
 1. 用 10~50 个关键词验证解析结果与人工看到的排名是否一致；
 2. 再逐步扩大任务数量；
 3. 一旦出现挑战，让程序停下来，而不是继续强行请求。
+
+---
+
+## v1.1：关于“第一个关键词立即 -4”的修复
+
+v1 的挑战检测包含过宽的字符串 `recaptcha`。正常 Google 页面如果包含非挑战用途的 reCAPTCHA 文本/标记，也可能被误判为 `-4`。
+
+v1.1 改为只认以下明确证据：
+
+- 当前 URL 进入 `/sorry/`；
+- 页面存在**可见** reCAPTCHA iframe；
+- 页面可见正文包含明确的 `unusual traffic` / `automated queries` 挑战语句。
+
+同时新增：
+
+- `-9 GOOGLE_CONSENT_REQUIRED`：Google 普通 consent 页面，不再误记成 CAPTCHA；
+- `logs/diagnostics/`：遇到 `-4` 或 `-9` 时自动保存截图与可见正文，便于判断实际页面；
+- 日志会直接打印触发原因；
+- `bootstrap_profile_windows.bat`：打开程序使用的**同一个专用 Chrome Profile**，可手工完成普通 consent 设置后关闭。它不会处理或绕过 CAPTCHA。
+
+若 v1.1 再出现 `-4`，请先打开 `logs/diagnostics/challenge_*.png`。若截图确实是 Google unusual-traffic/reCAPTCHA 页面，则该结果不是误报，程序会停止，不尝试绕过。
+
+### v1.1 断点/错误重试修正
+
+- 当天已经得到 `1..100` 或 `-1` 的任务视为最终完成，再次运行会跳过；
+- `-2..-9` 等运行错误仍可在修复问题后再次运行并重试；
+- 重启时调度索引按“当前剩余任务”重新计算，不再因为前面已完成任务的原始序号而额外等待数小时。
+
+因此，如果 v1 产生了 `Albert Einstein = -4`，使用 v1.1 后**不需要手工删除 SQLite 记录**；该负错误会自动成为可重试任务。

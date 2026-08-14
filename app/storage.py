@@ -67,10 +67,19 @@ def load_tasks(path: Path, limit: int) -> list[KeywordTask]:
 
 
 def already_done(conn, run_date: str, task: KeywordTask) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM results WHERE run_date=? AND keyword=? AND target_domain=?",
+    """Only final ranking outcomes are considered complete.
+
+    Positive ranks and -1 (complete top-N checked, target absent) are final.
+    Operational errors (-2 and below except -1) remain retryable on a later run.
+    """
+    row = conn.execute(
+        "SELECT result_code FROM results WHERE run_date=? AND keyword=? AND target_domain=?",
         (run_date, task.keyword, task.target_domain),
-    ).fetchone() is not None
+    ).fetchone()
+    if row is None:
+        return False
+    code = int(row[0])
+    return code > 0 or code == -1
 
 
 def save_result(conn, run_date: str, result: SearchResult, items: list[ImageItem]) -> int:
