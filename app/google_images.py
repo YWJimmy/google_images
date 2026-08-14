@@ -11,6 +11,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 from .config import Config
 from .models import ImageItem, KeywordTask
 from .ranking import domain_matches, extract_external_from_href, hostname, is_google_host
+from .structured_domains import SourceDomainObservation, parse_minimal_structured_domains
 
 # Deliberately specific phrases only. Do NOT use generic "recaptcha" substring
 # matching because normal Google pages can contain that word in non-challenge UI.
@@ -472,56 +473,30 @@ class GoogleImagesBrowser:
 
         return self._write_probe_report(directory, timestamp, report)
 
-    def _resolve_clicked_candidate_domains(
-        self, candidate, deadline: float, observation_timeout_ms: int
-    ) -> tuple[set[str], str]:
-        """Click one result and return external domains without retaining full URLs."""
+    def _structured_source_observations(
+        self, max_results: int
+    ) -> list[SourceDomainObservation]:
+        """Parse source domains from the loaded page without clicking results."""
         if not self.page:
-            return set(), "page_missing"
-        before_domains = self._visible_external_domain_counts(self.page)
-        popup = None
-        remaining_ms = max(
-            250,
-            min(observation_timeout_ms, int((deadline - time.monotonic()) * 1000)),
+            return []
+        candidates = self.page.locator('a[href*="/goto"]:has(img)')
+        records = candidates.evaluate_all(
+            """(anchors, maxResults) => anchors.slice(0, maxResults).map(anchor => {
+                const blocks = [];
+                let node = anchor;
+                for (let depth = 0; node && depth < 9; depth++, node = node.parentElement) {
+                    const resultCount = node.querySelectorAll('a[href*="/goto"]:has(img)').length;
+                    if (resultCount > 1) break;
+                    const html = node.outerHTML || '';
+                    if (html && html.length <= 200000) blocks.push(html);
+                }
+                return {href: anchor.href || '', blocks};
+            })""",
+            max_results,
         )
-        try:
-            with self.page.expect_popup(timeout=remaining_ms) as popup_info:
-                candidate.scroll_into_view_if_needed(timeout=min(remaining_ms, 3000))
-                candidate.click(timeout=remaining_ms)
-            popup = popup_info.value
-        except PlaywrightTimeoutError:
-            self.page.wait_for_timeout(min(250, remaining_ms))
-            after_domains = self._visible_external_domain_counts(self.page)
-            increased = {
-                domain for domain, count in after_domains.items()
-                if count > before_domains.get(domain, 0)
-            }
-            return increased, "panel" if increased else "no_popup_or_panel_domain"
-
-        try:
-            wait_ms = max(
-                250,
-                min(observation_timeout_ms, int((deadline - time.monotonic()) * 1000)),
-            )
-            try:
-                popup.wait_for_url(
-                    lambda url: bool(hostname(url) and not is_google_host(hostname(url))),
-                    timeout=wait_ms,
-                )
-            except PlaywrightTimeoutError:
-                pass
-            popup_url = popup.url or ""
-            popup_domain = hostname(popup_url)
-            if is_google_host(popup_domain) and "/sorry/" in urlsplit(popup_url).path.lower():
-                raise ChallengeDetected("Google challenge detected in result popup")
-            if popup_domain and not is_google_host(popup_domain):
-                return {popup_domain}, "popup"
-            return set(), "popup_without_external_domain"
-        finally:
-            try:
-                popup.close()
-            except Exception:
-                pass
+        hrefs = [str(record.get("href", "")) for record in records]
+        blocks = [list(record.get("blocks", [])) for record in records]
+        return parse_minimal_structured_domains(self.page.content(), hrefs, blocks)
 
     def test_top_image_sources(
         self,
@@ -529,9 +504,8 @@ class GoogleImagesBrowser:
         tasks: list[KeywordTask],
         max_results: int,
         time_budget_seconds: float,
-        observation_timeout_ms: int,
     ) -> tuple[dict, Path]:
-        """Run a bounded sequential source-domain test over multiple samples."""
+        """Run a DOM-only bounded source-domain test over multiple samples."""
         if not self.page or not self.context:
             raise BrowserLaunchError("browser not started")
         timestamp = datetime.now().astimezone()
@@ -559,6 +533,10 @@ class GoogleImagesBrowser:
                 "resolved_count": 0,
                 "matched_rank": None,
                 "matched_domain": None,
+                "candidate_match_rank": None,
+                "candidate_match_domain": None,
+                "candidate_match_status": None,
+                "unresolved_before_candidate_match": 0,
                 "status": "pending",
                 "resolution_methods": {},
                 "elapsed_ms": None,
@@ -567,48 +545,46 @@ class GoogleImagesBrowser:
             try:
                 self._navigate_to_search(task.keyword)
                 self._assert_normal_page()
-                candidates = self.page.locator('a[href*="/goto"]:has(img)')
-                candidate_count = min(candidates.count(), max_results)
+                observations = self._structured_source_observations(max_results)
+                candidate_count = len(observations)
                 sample["candidate_count"] = candidate_count
                 methods: Counter[str] = Counter()
 
-                for rank in range(1, candidate_count + 1):
-                    if time.monotonic() >= sample_deadline:
-                        sample["status"] = "sample_time_budget_exhausted"
-                        break
-                    self._assert_normal_page()
-                    candidate = candidates.nth(rank - 1)
-                    try:
-                        href = candidate.evaluate("anchor => anchor.href || ''")
-                        if not probe_href_kind(href).startswith("google_goto_"):
-                            methods["skipped_non_goto"] += 1
-                            continue
-                        domains, method = self._resolve_clicked_candidate_domains(
-                            candidate, sample_deadline, observation_timeout_ms
-                        )
-                    except ChallengeDetected:
-                        raise
-                    except Exception:
-                        domains, method = set(), "candidate_error"
+                unresolved_ranks: list[int] = []
+                candidate_match: tuple[int, str, str] | None = None
+                for observation in observations:
                     sample["attempted_count"] += 1
-                    methods[method] += 1
-                    if domains:
+                    methods[f"{observation.method}:{observation.status}"] += 1
+                    if observation.status == "resolved":
                         sample["resolved_count"] += 1
+                    else:
+                        unresolved_ranks.append(observation.rank)
                     matched = next(
-                        (domain for domain in sorted(domains)
+                        (domain for domain in observation.domains
                          if domain_matches(domain, task.target_domain, self.cfg.include_subdomains)),
                         None,
                     )
-                    if matched:
-                        sample["matched_rank"] = rank
-                        sample["matched_domain"] = matched
+                    if matched and candidate_match is None:
+                        candidate_match = (observation.rank, matched, observation.status)
+
+                if candidate_match:
+                    candidate_rank, candidate_domain, candidate_status = candidate_match
+                    unresolved_before = sum(rank < candidate_rank for rank in unresolved_ranks)
+                    sample["candidate_match_rank"] = candidate_rank
+                    sample["candidate_match_domain"] = candidate_domain
+                    sample["candidate_match_status"] = candidate_status
+                    sample["unresolved_before_candidate_match"] = unresolved_before
+                    if unresolved_before == 0 and candidate_status == "resolved":
+                        sample["matched_rank"] = candidate_rank
+                        sample["matched_domain"] = candidate_domain
                         sample["status"] = "found"
-                        break
+                    else:
+                        sample["status"] = "candidate_match_with_unresolved_predecessors"
 
                 if sample["status"] == "pending":
                     if candidate_count < max_results:
                         sample["status"] = "incomplete_candidate_depth"
-                    elif sample["attempted_count"] < max_results:
+                    elif sample["resolved_count"] < max_results:
                         sample["status"] = "incomplete_resolution"
                     else:
                         sample["status"] = "not_found_in_top_n"
@@ -653,8 +629,9 @@ class GoogleImagesBrowser:
                 "sample_limit": len(tasks),
                 "max_results_per_sample": max_results,
                 "time_budget_seconds": time_budget_seconds,
-                "observation_timeout_ms": observation_timeout_ms,
                 "sequential_only": True,
+                "interaction_mode": "dom_only",
+                "result_clicks": 0,
             },
             "privacy": {
                 "keywords_recorded": False,

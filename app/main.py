@@ -20,7 +20,6 @@ def main():
     ap.add_argument("--source-domain-test", action="store_true", help="run a bounded top-N source-domain test")
     ap.add_argument("--test-max-results", type=int, default=100)
     ap.add_argument("--test-time-budget-seconds", type=float, default=300)
-    ap.add_argument("--test-observation-timeout-ms", type=int, default=1500)
     ap.add_argument("--capture-state", action="store_true", help="capture state from a manually opened Chrome")
     ap.add_argument("--cdp-endpoint", default="http://127.0.0.1:9222")
     args = ap.parse_args()
@@ -88,8 +87,6 @@ def main():
             raise SystemExit("--test-max-results must be between 1 and 100")
         if args.test_time_budget_seconds <= 0:
             raise SystemExit("--test-time-budget-seconds must be > 0")
-        if not (250 <= args.test_observation_timeout_ms <= 5000):
-            raise SystemExit("--test-observation-timeout-ms must be between 250 and 5000")
         tasks = load_tasks(cfg.input_csv, sample_limit)
         browser = GoogleImagesBrowser(cfg)
         try:
@@ -105,7 +102,6 @@ def main():
                 tasks,
                 args.test_max_results,
                 args.test_time_budget_seconds,
-                args.test_observation_timeout_ms,
             )
             print(json.dumps(report, ensure_ascii=False, indent=2))
             print(f"Source-domain test report saved to: {path}")

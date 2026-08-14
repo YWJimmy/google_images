@@ -1,4 +1,5 @@
 from app.ranking import domain_matches, extract_external_from_href, is_google_host
+from app.structured_domains import extract_external_domains, parse_minimal_structured_domains
 from app.google_images import (
     diagnostic_outcome,
     infer_google_login,
@@ -84,3 +85,43 @@ def test_probe_href_kind_does_not_expose_or_require_opaque_token_contents():
         "https://www.google.com/goto?url=https%3A%2F%2Fexample.com%2Fpage"
     ) == "google_goto_absolute_url"
     assert probe_href_kind("https://example.com/page") == "other"
+
+def test_minimal_structured_parser_resolves_one_external_domain():
+    token = "CAES-example-one"
+    href = f"https://www.google.com/goto?url={token}"
+    html = (
+        "<script>AF_initDataCallback({data:["
+        f"['{token}', ['https:\\/\\/en.wikipedia.org\\/wiki\\/Example']]"
+        "]});</script>"
+    )
+    observation = parse_minimal_structured_domains(html, [href])[0]
+    assert observation.status == "resolved"
+    assert observation.domains == ("en.wikipedia.org",)
+    assert observation.method == "structured_script"
+
+def test_minimal_structured_parser_is_fail_closed_on_ambiguous_domains():
+    token = "CAES-example-two"
+    href = f"https://www.google.com/goto?url={token}"
+    html = (
+        "<script>load(["
+        f"'{token}', 'https://example.com/page', 'https://cdn.example.net/image.jpg'"
+        "]);</script>"
+    )
+    observation = parse_minimal_structured_domains(html, [href])[0]
+    assert observation.status == "ambiguous"
+    assert observation.domains == ("cdn.example.net", "example.com")
+
+def test_minimal_structured_parser_filters_google_country_domains_and_uses_dom_fallback():
+    href = "https://www.google.com/goto?url=CAES-dom-fallback"
+    blocks = [[
+        '<div><a href="https://www.google.com.hk/about">Google</a>'
+        '<a href="https://source.example.org/page">Source</a></div>'
+    ]]
+    observation = parse_minimal_structured_domains("<html></html>", [href], blocks)[0]
+    assert observation.status == "resolved"
+    assert observation.domains == ("source.example.org",)
+    assert observation.method == "dom_ancestor"
+
+def test_external_domain_extraction_decodes_percent_and_unicode_escapes():
+    text = r"https\u003a\u002f\u002fexample.com%2Fpage"
+    assert extract_external_domains(text) == ("example.com",)
