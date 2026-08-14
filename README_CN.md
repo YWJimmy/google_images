@@ -453,6 +453,14 @@ python -m app.main --config config.yaml --probe-first-image --probe-keyword "Alb
 
 报告保存到 `logs/diagnostics/first_image_probe_*.json`。报告不记录搜索词、完整 URL、`goto` 令牌或 Cookie 值，只保留结构变化和规范化来源域名；探针每次只点击一张图片，遇到 challenge 或 consent 会停止。
 
+基于新标签页最终域名执行 10 个样例的 Top 100 有界测试：
+
+```powershell
+python -m app.main --config config.yaml --source-domain-test --limit 10 --test-max-results 100 --test-time-budget-seconds 300 --test-observation-timeout-ms 1500
+```
+
+测试按样例和图片顺序串行执行，命中目标域名后提前结束当前样例；总预算会按剩余样例动态分配，防止一个未命中样例占满全部时间。全局达到时间预算或遇到 challenge/consent 时停止。报告保存到 `logs/diagnostics/source_domain_test_*.json`，不记录搜索词、完整 URL 或 `goto` 令牌。未检查完 Top 100 的样例只标记为不完整，不会误报目标不存在。
+
 ### 隐私边界
 
 `private/google_state.json` 包含可复用的浏览器会话信息，应视为凭据。以下路径已经被 `.gitignore` 排除：

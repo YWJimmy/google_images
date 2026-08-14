@@ -5,6 +5,7 @@ from .config import load_config
 from .google_images import BrowserLaunchError, GoogleImagesBrowser
 from .runner import run
 from .state_capture import StateCaptureError, capture_google_state
+from .storage import load_tasks
 
 
 def main():
@@ -16,6 +17,10 @@ def main():
     ap.add_argument("--diagnose-keyword", default="Albert Einstein")
     ap.add_argument("--probe-first-image", action="store_true", help="click one image and report its structure")
     ap.add_argument("--probe-keyword", default="Albert Einstein")
+    ap.add_argument("--source-domain-test", action="store_true", help="run a bounded top-N source-domain test")
+    ap.add_argument("--test-max-results", type=int, default=100)
+    ap.add_argument("--test-time-budget-seconds", type=float, default=300)
+    ap.add_argument("--test-observation-timeout-ms", type=int, default=1500)
     ap.add_argument("--capture-state", action="store_true", help="capture state from a manually opened Chrome")
     ap.add_argument("--cdp-endpoint", default="http://127.0.0.1:9222")
     args = ap.parse_args()
@@ -72,6 +77,38 @@ def main():
             )
             print(json.dumps(report, ensure_ascii=False, indent=2))
             print(f"Probe report saved to: {path}")
+            if report["process_exit_code"]:
+                raise SystemExit(report["process_exit_code"])
+        finally:
+            browser.close()
+        return
+    if args.source_domain_test:
+        sample_limit = args.limit or 10
+        if not (1 <= args.test_max_results <= 100):
+            raise SystemExit("--test-max-results must be between 1 and 100")
+        if args.test_time_budget_seconds <= 0:
+            raise SystemExit("--test-time-budget-seconds must be > 0")
+        if not (250 <= args.test_observation_timeout_ms <= 5000):
+            raise SystemExit("--test-observation-timeout-ms must be between 250 and 5000")
+        tasks = load_tasks(cfg.input_csv, sample_limit)
+        browser = GoogleImagesBrowser(cfg)
+        try:
+            try:
+                browser.start()
+            except BrowserLaunchError as exc:
+                path = browser.save_launch_failure_diagnostic(cfg.log_dir / "diagnostics", exc)
+                print("Browser launch failed; a diagnostic report was still created.")
+                print(f"Diagnostic report saved to: {path}")
+                raise SystemExit(3) from None
+            report, path = browser.test_top_image_sources(
+                cfg.log_dir / "diagnostics",
+                tasks,
+                args.test_max_results,
+                args.test_time_budget_seconds,
+                args.test_observation_timeout_ms,
+            )
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            print(f"Source-domain test report saved to: {path}")
             if report["process_exit_code"]:
                 raise SystemExit(report["process_exit_code"])
         finally:

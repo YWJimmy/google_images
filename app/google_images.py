@@ -9,8 +9,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from .config import Config
-from .models import ImageItem
-from .ranking import extract_external_from_href, hostname, is_google_host
+from .models import ImageItem, KeywordTask
+from .ranking import domain_matches, extract_external_from_href, hostname, is_google_host
 
 # Deliberately specific phrases only. Do NOT use generic "recaptcha" substring
 # matching because normal Google pages can contain that word in non-challenge UI.
@@ -471,6 +471,215 @@ class GoogleImagesBrowser:
                     pass
 
         return self._write_probe_report(directory, timestamp, report)
+
+    def _resolve_clicked_candidate_domains(
+        self, candidate, deadline: float, observation_timeout_ms: int
+    ) -> tuple[set[str], str]:
+        """Click one result and return external domains without retaining full URLs."""
+        if not self.page:
+            return set(), "page_missing"
+        before_domains = self._visible_external_domain_counts(self.page)
+        popup = None
+        remaining_ms = max(
+            250,
+            min(observation_timeout_ms, int((deadline - time.monotonic()) * 1000)),
+        )
+        try:
+            with self.page.expect_popup(timeout=remaining_ms) as popup_info:
+                candidate.scroll_into_view_if_needed(timeout=min(remaining_ms, 3000))
+                candidate.click(timeout=remaining_ms)
+            popup = popup_info.value
+        except PlaywrightTimeoutError:
+            self.page.wait_for_timeout(min(250, remaining_ms))
+            after_domains = self._visible_external_domain_counts(self.page)
+            increased = {
+                domain for domain, count in after_domains.items()
+                if count > before_domains.get(domain, 0)
+            }
+            return increased, "panel" if increased else "no_popup_or_panel_domain"
+
+        try:
+            wait_ms = max(
+                250,
+                min(observation_timeout_ms, int((deadline - time.monotonic()) * 1000)),
+            )
+            try:
+                popup.wait_for_url(
+                    lambda url: bool(hostname(url) and not is_google_host(hostname(url))),
+                    timeout=wait_ms,
+                )
+            except PlaywrightTimeoutError:
+                pass
+            popup_url = popup.url or ""
+            popup_domain = hostname(popup_url)
+            if is_google_host(popup_domain) and "/sorry/" in urlsplit(popup_url).path.lower():
+                raise ChallengeDetected("Google challenge detected in result popup")
+            if popup_domain and not is_google_host(popup_domain):
+                return {popup_domain}, "popup"
+            return set(), "popup_without_external_domain"
+        finally:
+            try:
+                popup.close()
+            except Exception:
+                pass
+
+    def test_top_image_sources(
+        self,
+        directory: Path,
+        tasks: list[KeywordTask],
+        max_results: int,
+        time_budget_seconds: float,
+        observation_timeout_ms: int,
+    ) -> tuple[dict, Path]:
+        """Run a bounded sequential source-domain test over multiple samples."""
+        if not self.page or not self.context:
+            raise BrowserLaunchError("browser not started")
+        timestamp = datetime.now().astimezone()
+        started = time.monotonic()
+        deadline = started + time_budget_seconds
+        sample_reports: list[dict[str, object]] = []
+        stopped_reason = None
+
+        for sample_index, task in enumerate(tasks, start=1):
+            if time.monotonic() >= deadline:
+                stopped_reason = "time_budget_exhausted"
+                break
+            sample_started = time.monotonic()
+            remaining_samples = len(tasks) - sample_index + 1
+            fair_share_seconds = max(
+                5.0,
+                (deadline - sample_started) / max(remaining_samples, 1),
+            )
+            sample_deadline = min(deadline, sample_started + fair_share_seconds)
+            sample = {
+                "sample_index": sample_index,
+                "target_domain": task.target_domain,
+                "candidate_count": 0,
+                "attempted_count": 0,
+                "resolved_count": 0,
+                "matched_rank": None,
+                "matched_domain": None,
+                "status": "pending",
+                "resolution_methods": {},
+                "elapsed_ms": None,
+                "sample_time_budget_seconds": round(fair_share_seconds, 3),
+            }
+            try:
+                self._navigate_to_search(task.keyword)
+                self._assert_normal_page()
+                candidates = self.page.locator('a[href*="/goto"]:has(img)')
+                candidate_count = min(candidates.count(), max_results)
+                sample["candidate_count"] = candidate_count
+                methods: Counter[str] = Counter()
+
+                for rank in range(1, candidate_count + 1):
+                    if time.monotonic() >= sample_deadline:
+                        sample["status"] = "sample_time_budget_exhausted"
+                        break
+                    self._assert_normal_page()
+                    candidate = candidates.nth(rank - 1)
+                    try:
+                        href = candidate.evaluate("anchor => anchor.href || ''")
+                        if not probe_href_kind(href).startswith("google_goto_"):
+                            methods["skipped_non_goto"] += 1
+                            continue
+                        domains, method = self._resolve_clicked_candidate_domains(
+                            candidate, sample_deadline, observation_timeout_ms
+                        )
+                    except ChallengeDetected:
+                        raise
+                    except Exception:
+                        domains, method = set(), "candidate_error"
+                    sample["attempted_count"] += 1
+                    methods[method] += 1
+                    if domains:
+                        sample["resolved_count"] += 1
+                    matched = next(
+                        (domain for domain in sorted(domains)
+                         if domain_matches(domain, task.target_domain, self.cfg.include_subdomains)),
+                        None,
+                    )
+                    if matched:
+                        sample["matched_rank"] = rank
+                        sample["matched_domain"] = matched
+                        sample["status"] = "found"
+                        break
+
+                if sample["status"] == "pending":
+                    if candidate_count < max_results:
+                        sample["status"] = "incomplete_candidate_depth"
+                    elif sample["attempted_count"] < max_results:
+                        sample["status"] = "incomplete_resolution"
+                    else:
+                        sample["status"] = "not_found_in_top_n"
+                sample["resolution_methods"] = dict(sorted(methods.items()))
+            except ChallengeDetected:
+                sample["status"] = "challenge"
+                stopped_reason = "challenge"
+            except ConsentRequired:
+                sample["status"] = "consent"
+                stopped_reason = "consent"
+            except Exception as exc:
+                sample["status"] = "error"
+                sample["error_type"] = type(exc).__name__
+            finally:
+                sample["elapsed_ms"] = int((time.monotonic() - sample_started) * 1000)
+                sample_reports.append(sample)
+            if stopped_reason in {"challenge", "consent", "time_budget_exhausted"}:
+                break
+
+        elapsed_seconds = round(time.monotonic() - started, 3)
+        statuses = Counter(str(sample["status"]) for sample in sample_reports)
+        total_attempted = sum(int(sample["attempted_count"]) for sample in sample_reports)
+        total_resolved = sum(int(sample["resolved_count"]) for sample in sample_reports)
+        if stopped_reason == "challenge":
+            result_code, result_type, process_exit_code = -4, "GOOGLE_CHALLENGE_OR_UNUSUAL_TRAFFIC", 4
+        elif stopped_reason == "consent":
+            result_code, result_type, process_exit_code = -9, "GOOGLE_CONSENT_REQUIRED", 9
+        elif stopped_reason == "time_budget_exhausted" or len(sample_reports) < len(tasks):
+            result_code, result_type, process_exit_code = -5, "SOURCE_TEST_TIME_BUDGET_EXHAUSTED", 5
+        elif any(sample["status"] not in {"found", "not_found_in_top_n"} for sample in sample_reports):
+            result_code, result_type, process_exit_code = -5, "SOURCE_TEST_INCOMPLETE", 5
+        else:
+            result_code, result_type, process_exit_code = 0, "SOURCE_TEST_COMPLETE", 0
+
+        report = {
+            "generated_at": timestamp.isoformat(timespec="seconds"),
+            "purpose": "Bounded top-N image source-domain test; no challenge bypass.",
+            "result_code": result_code,
+            "result_type": result_type,
+            "process_exit_code": process_exit_code,
+            "limits": {
+                "sample_limit": len(tasks),
+                "max_results_per_sample": max_results,
+                "time_budget_seconds": time_budget_seconds,
+                "observation_timeout_ms": observation_timeout_ms,
+                "sequential_only": True,
+            },
+            "privacy": {
+                "keywords_recorded": False,
+                "full_urls_recorded": False,
+                "goto_tokens_recorded": False,
+                "cookie_values_recorded": False,
+            },
+            "summary": {
+                "samples_started": len(sample_reports),
+                "samples_requested": len(tasks),
+                "statuses": dict(sorted(statuses.items())),
+                "total_attempted": total_attempted,
+                "total_resolved": total_resolved,
+                "resolution_rate": (
+                    round(total_resolved / total_attempted, 4) if total_attempted else 0.0
+                ),
+                "elapsed_seconds": elapsed_seconds,
+                "stopped_reason": stopped_reason,
+            },
+            "samples": sample_reports,
+        }
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / ("source_domain_test_" + timestamp.strftime("%Y%m%d_%H%M%S") + ".json")
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return report, path
 
     @staticmethod
     def _write_probe_report(directory: Path, timestamp: datetime, report: dict) -> tuple[dict, Path]:
