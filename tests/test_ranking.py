@@ -1,4 +1,4 @@
-from app.ranking import domain_matches, extract_external_from_href
+from app.ranking import domain_matches, extract_external_from_href, is_google_host
 from app.google_images import diagnostic_outcome, infer_google_login, is_expected_google_com_host, redact_diagnostic_url
 
 def test_domain_matches():
@@ -15,6 +15,27 @@ def test_direct_external():
     page, image = extract_external_from_href("https://example.com/page")
     assert page == "https://example.com/page"
     assert image is None
+
+def test_google_country_domains_are_not_external_sources():
+    for host in (
+        "google.cn",
+        "images.google.cn",
+        "google.com.hk",
+        "www.google.com.au",
+        "google.co.uk",
+        "images.google.co.jp",
+    ):
+        assert is_google_host(host)
+
+    for href in (
+        "https://www.google.com.hk/intl/en/about/products",
+        "https://images.google.co.uk/search?q=test",
+    ):
+        assert extract_external_from_href(href) == (None, None)
+
+def test_google_lookalike_domains_remain_external():
+    for host in ("notgoogle.com", "google.evil.com", "google.com.evil.net"):
+        assert not is_google_host(host)
 
 def test_nested_google_goto_redirect():
     href = (

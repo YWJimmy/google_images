@@ -1,7 +1,7 @@
 from __future__ import annotations
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
-GOOGLE_HOST_SUFFIXES = ("google.com", "googleusercontent.com", "gstatic.com", "ggpht.com")
+GOOGLE_SERVICE_HOST_SUFFIXES = ("googleusercontent.com", "gstatic.com", "ggpht.com")
 
 
 def normalize_domain(value: str) -> str:
@@ -29,8 +29,33 @@ def hostname(url: str) -> str:
 
 
 def is_google_host(host: str) -> bool:
-    host = host.lower()
-    return any(host == s or host.endswith("." + s) for s in GOOGLE_HOST_SUFFIXES)
+    """Return whether a host belongs to a Google search/service domain.
+
+    Google Search uses both ``google.<ccTLD>`` (for example ``google.cn``)
+    and ``google.com.<ccTLD>``/``google.co.<ccTLD>`` country domains.  Match
+    those forms structurally so lookalikes such as ``google.evil.com`` are
+    not treated as Google-owned hosts.
+    """
+    host = normalize_domain(host)
+    if not host:
+        return False
+    if any(host == suffix or host.endswith("." + suffix)
+           for suffix in GOOGLE_SERVICE_HOST_SUFFIXES):
+        return True
+
+    labels = host.split(".")
+    for index, label in enumerate(labels):
+        if label != "google":
+            continue
+        suffix = labels[index + 1:]
+        if suffix == ["com"]:
+            return True
+        if len(suffix) == 1 and len(suffix[0]) == 2 and suffix[0].isalpha():
+            return True
+        if (len(suffix) == 2 and suffix[0] in {"co", "com"}
+                and len(suffix[1]) == 2 and suffix[1].isalpha()):
+            return True
+    return False
 
 
 def domain_matches(host: str, target: str, include_subdomains: bool = True) -> bool:
