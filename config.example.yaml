@@ -1,0 +1,36 @@
+# Google Images Local Rank Tracker v1
+# This project does NOT bypass CAPTCHA or Google anti-automation controls.
+
+daily_limit: 1000
+run_hours: 8
+max_results: 100
+
+# Google search context
+base_url: "https://www.google.com/search"
+hl: "en"
+gl: "us"
+
+# Browser
+browser_channel: "chrome"      # installed Google Chrome
+headless: false                 # keep visible for transparency / manual inspection
+profile_dir: "profile/google_profile"
+viewport_width: 1440
+viewport_height: 1000
+navigation_timeout_ms: 45000
+
+# Loading the image grid. Fixed values only; not human-behavior randomization.
+max_scroll_rounds: 12
+scroll_pixels: 1800
+scroll_wait_ms: 1200
+
+# If fewer than max_results are collected, return -5 instead of -1.
+require_full_depth: true
+include_subdomains: true
+
+input_csv: "keywords_1000.csv"
+database_path: "rank_tracker.sqlite3"
+output_dir: "output"
+log_dir: "logs"
+
+# Safety stop: challenge / unusual-traffic detection immediately stops the run.
+stop_on_challenge: true
