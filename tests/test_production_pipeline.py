@@ -289,6 +289,25 @@ def test_dashboard_resume_start_marks_prior_samples_without_rerunning(monkeypatc
     assert [task["status"] for task in slot.tasks] == ["resumed", "resumed", "pending"]
 
 
+def test_human_wait_uses_cdp_state_then_reconnects_playwright(monkeypatch):
+    dashboard = __import__("app.dashboard", fromlist=["ChromeSlot"])
+    monkeypatch.setattr(dashboard, "HUMAN_POLL_SECONDS", 0)
+    slot = dashboard.ChromeSlot(
+        "test", "test", "http://127.0.0.1:9222", SimpleNamespace(input_csv=Path("input.csv"))
+    )
+    monkeypatch.setattr(slot, "_read_cdp_page_state", lambda: "normal")
+
+    calls = []
+    browser = SimpleNamespace(
+        close=lambda: calls.append("close"),
+        start=lambda: calls.append("start"),
+        page_state=lambda: ("normal", None),
+    )
+
+    assert slot._wait_for_human(browser)
+    assert calls == ["close", "start"]
+
+
 def test_dashboard_classifies_cdp_tabs_without_query_details():
     assert classify_cdp_page_urls(["https://images.google.com/search?q=private"]) == "normal"
     assert classify_cdp_page_urls(["https://www.google.com/sorry/index?q=token"]) == "challenge"

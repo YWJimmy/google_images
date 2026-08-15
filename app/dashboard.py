@@ -112,17 +112,20 @@ class ChromeSlot:
     def active(self) -> bool:
         return bool(self.worker and self.worker.is_alive())
 
+    def _read_cdp_page_state(self) -> str:
+        with urlopen(self.endpoint + "/json", timeout=2) as response:
+            targets = json.loads(response.read().decode("utf-8"))
+        return classify_cdp_page_urls(
+            [str(target.get("url", "")) for target in targets if target.get("type") == "page"]
+        )
+
     def probe(self) -> None:
         online = False
         page_state = "unknown"
         try:
             with urlopen(self.endpoint + "/json/version", timeout=2) as response:
                 online = response.status == 200
-            with urlopen(self.endpoint + "/json", timeout=2) as response:
-                targets = json.loads(response.read().decode("utf-8"))
-                page_state = classify_cdp_page_urls(
-                    [str(target.get("url", "")) for target in targets if target.get("type") == "page"]
-                )
+            page_state = self._read_cdp_page_state()
         except Exception:
             online = False
         with self.lock:
@@ -216,8 +219,15 @@ class ChromeSlot:
             if self.stop_event.wait(HUMAN_POLL_SECONDS):
                 return False
             try:
-                browser.refresh_page_binding(prefer_normal_google_page=True)
-                page_state, _ = browser.page_state()
+                page_state = self._read_cdp_page_state()
+                if page_state == "normal":
+                    # A page completed manually can be correct in Chrome while a
+                    # long-lived Playwright-over-CDP Page retains its pre-solve URL.
+                    # Reconnecting refreshes Playwright's target/frame cache without
+                    # closing or navigating the user's Chrome window.
+                    browser.close()
+                    browser.start()
+                    page_state, _ = browser.page_state()
             except Exception:
                 page_state = "unknown"
             with self.lock:
