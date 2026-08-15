@@ -21,10 +21,10 @@ def main():
     ap.add_argument("--test-max-results", type=int, default=100)
     ap.add_argument("--test-time-budget-seconds", type=float, default=300)
     ap.add_argument(
-        "--test-start-interval-seconds",
+        "--test-post-search-delay-seconds",
         type=float,
-        default=10,
-        help="minimum interval between consecutive test search start times",
+        default=6,
+        help="fixed delay after one test search finishes before the next starts",
     )
     ap.add_argument("--capture-state", action="store_true", help="capture state from a manually opened Chrome")
     ap.add_argument("--cdp-endpoint", default="http://127.0.0.1:9222")
@@ -96,8 +96,8 @@ def main():
             raise SystemExit("--test-max-results must be between 1 and 100")
         if args.test_time_budget_seconds <= 0:
             raise SystemExit("--test-time-budget-seconds must be > 0")
-        if args.test_start_interval_seconds < 0:
-            raise SystemExit("--test-start-interval-seconds must be >= 0")
+        if args.test_post_search_delay_seconds < 0:
+            raise SystemExit("--test-post-search-delay-seconds must be >= 0")
         tasks = load_tasks(cfg.input_csv, sample_limit)
         browser = GoogleImagesBrowser(cfg)
         try:
@@ -113,7 +113,7 @@ def main():
                 tasks,
                 args.test_max_results,
                 args.test_time_budget_seconds,
-                args.test_start_interval_seconds,
+                args.test_post_search_delay_seconds,
             )
             print(json.dumps(report, ensure_ascii=False, indent=2))
             print(f"Source-domain test report saved to: {path}")

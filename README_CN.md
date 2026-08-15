@@ -472,7 +472,7 @@ python -m app.main --config config.yaml --probe-first-image --probe-keyword "Alb
 python -m app.main --config config.yaml --source-domain-test --limit 10 --test-max-results 100 --test-time-budget-seconds 300
 ```
 
-来源测试默认按固定 `10` 秒启动间隔运行；可用 `--test-start-interval-seconds` 显式覆盖。该间隔按相邻搜索的实际开始时间计算，报告中的 `start_gap_ms` 可用于核验。
+来源测试默认在每次搜索完全结束后固定等待 `6` 秒，再启动下一次搜索；成功、失败和 5 秒超时跳过都遵循该规则。可用 `--test-post-search-delay-seconds` 显式覆盖，报告中的 `previous_finish_to_start_ms` 可用于核验。
 
 测试按样例顺序串行加载页面，但不会点击图片。图片锚点直接提供外部 `href` 时优先读取其规范化域名；页面只提供 Google `goto` 令牌时，再从页面 HTML、内嵌脚本和单结果 DOM 祖先中寻找包含该令牌的最小结构块。仅当结构块中存在唯一外部域名时才标记为已解析。总预算会按剩余样例动态分配。报告保存到 `logs/diagnostics/source_domain_test_*.json`，不记录搜索词、完整 URL 或 `goto` 令牌。存在缺失、多域名歧义或匹配项之前仍有未解析位置时，只标记为不完整，不会误报精确排名或目标不存在。
 

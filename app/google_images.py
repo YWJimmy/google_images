@@ -108,6 +108,28 @@ class NavigationError(RuntimeError):
 class SearchParseTimeout(RuntimeError):
     pass
 
+
+def wait_for_post_search_delay(
+    previous_finished: float | None,
+    delay_seconds: float,
+    deadline: float,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+) -> bool:
+    """Wait after completion; return False if the next start exceeds the budget."""
+    if previous_finished is None:
+        return True
+    next_start = previous_finished + delay_seconds
+    while True:
+        now = clock()
+        remaining = next_start - now
+        if remaining <= 0:
+            return True
+        if now + remaining >= deadline:
+            return False
+        sleeper(min(remaining, 0.25))
+
+
 class GoogleImagesBrowser:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -606,7 +628,7 @@ class GoogleImagesBrowser:
         tasks: list[KeywordTask],
         max_results: int,
         time_budget_seconds: float,
-        start_interval_seconds: float = 0,
+        post_search_delay_seconds: float = 0,
     ) -> tuple[dict, Path]:
         """Run a DOM-only bounded source-domain test over multiple samples."""
         if not self.page or not self.context:
@@ -617,24 +639,17 @@ class GoogleImagesBrowser:
         sample_reports: list[dict[str, object]] = []
         stopped_reason = None
         previous_sample_started: float | None = None
+        previous_sample_finished: float | None = None
 
         for sample_index, task in enumerate(tasks, start=1):
-            scheduled_start = started + (sample_index - 1) * start_interval_seconds
-            if previous_sample_started is not None:
-                scheduled_start = max(
-                    scheduled_start,
-                    previous_sample_started + start_interval_seconds,
-                )
-            while True:
-                delay = scheduled_start - time.monotonic()
-                if delay <= 0:
-                    break
-                if time.monotonic() + delay >= deadline:
+            if previous_sample_finished is not None:
+                if not wait_for_post_search_delay(
+                    previous_sample_finished,
+                    post_search_delay_seconds,
+                    deadline,
+                ):
                     stopped_reason = "time_budget_exhausted"
                     break
-                time.sleep(min(delay, 0.25))
-            if stopped_reason == "time_budget_exhausted":
-                break
             if time.monotonic() >= deadline:
                 stopped_reason = "time_budget_exhausted"
                 break
@@ -651,6 +666,10 @@ class GoogleImagesBrowser:
                 "start_gap_ms": (
                     round((sample_started - previous_sample_started) * 1000)
                     if previous_sample_started is not None else None
+                ),
+                "previous_finish_to_start_ms": (
+                    round((sample_started - previous_sample_finished) * 1000)
+                    if previous_sample_finished is not None else None
                 ),
                 "target_domain": task.target_domain,
                 "candidate_count": 0,
@@ -752,6 +771,7 @@ class GoogleImagesBrowser:
             finally:
                 sample["elapsed_ms"] = int((time.monotonic() - sample_started) * 1000)
                 sample_reports.append(sample)
+                previous_sample_finished = time.monotonic()
             if stopped_reason in {"challenge", "consent", "time_budget_exhausted"}:
                 break
 
@@ -783,7 +803,7 @@ class GoogleImagesBrowser:
                 "sample_limit": len(tasks),
                 "max_results_per_sample": max_results,
                 "time_budget_seconds": time_budget_seconds,
-                "start_interval_seconds": start_interval_seconds,
+                "post_search_delay_seconds": post_search_delay_seconds,
                 "search_parse_timeout_ms": self.cfg.search_parse_timeout_ms,
                 "sequential_only": True,
                 "interaction_mode": "dom_only",

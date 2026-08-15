@@ -6,7 +6,12 @@ import pytest
 
 from app.config import _as_bool
 from app import main as main_module
-from app.google_images import ChallengeDetected, ConsentRequired, GoogleImagesBrowser
+from app.google_images import (
+    ChallengeDetected,
+    ConsentRequired,
+    GoogleImagesBrowser,
+    wait_for_post_search_delay,
+)
 from app.google_images import domain_matches as diagnostic_domain_matches
 from app.ranking_decision import decide_source_rank
 from app.state_capture import _google_only_snapshot, _is_google_url
@@ -129,7 +134,7 @@ def test_manual_cdp_close_detaches_without_closing_user_browser():
     }
 
 
-def test_source_test_default_start_interval_is_ten_seconds(monkeypatch):
+def test_source_test_default_post_search_delay_is_six_seconds(monkeypatch):
     captured = {}
 
     class Config:
@@ -143,8 +148,8 @@ def test_source_test_default_start_interval_is_ten_seconds(monkeypatch):
         def start(self):
             return self
 
-        def test_top_image_sources(self, _directory, _tasks, _maximum, _budget, interval):
-            captured["interval"] = interval
+        def test_top_image_sources(self, _directory, _tasks, _maximum, _budget, delay):
+            captured["delay"] = delay
             return {"process_exit_code": 0}, SimpleNamespace()
 
         def close(self):
@@ -156,4 +161,18 @@ def test_source_test_default_start_interval_is_ten_seconds(monkeypatch):
     monkeypatch.setattr(main_module, "GoogleImagesBrowser", Browser)
     monkeypatch.setattr("builtins.print", lambda *_args, **_kwargs: None)
     main_module.main()
-    assert captured["interval"] == 10
+    assert captured["delay"] == 6
+
+
+def test_post_search_delay_starts_six_seconds_after_completion():
+    now = [5.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    assert wait_for_post_search_delay(5.0, 6.0, 20.0, lambda: now[0], sleep)
+    assert now[0] >= 11.0
+
+
+def test_post_search_delay_does_not_start_past_total_budget():
+    assert not wait_for_post_search_delay(5.0, 6.0, 10.0, lambda: 5.0, lambda _seconds: None)
