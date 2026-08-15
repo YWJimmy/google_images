@@ -488,6 +488,7 @@ class ChromeSlot:
 
 
 OPERATION_LABELS = {
+    "self_check": "控制台自动自检",
     "validate": "校验配置",
     "capture": "捕获人工状态",
     "diagnose": "环境诊断",
@@ -567,6 +568,18 @@ class OperationManager:
             raise ValueError("unknown operation")
         base = [sys.executable, "-m", "app.main", "--config", str(self.config_path)]
         endpoint = validate_local_cdp_endpoint(str(payload.get("endpoint", "http://127.0.0.1:9222")))
+        if action == "self_check":
+            dashboard_base_url = validate_local_cdp_endpoint(
+                str(payload.get("dashboard_base_url", "http://127.0.0.1:8765"))
+            )
+            return [
+                sys.executable,
+                "-m",
+                "app.console_validator",
+                "--base-url",
+                dashboard_base_url,
+                "--skip-operation",
+            ]
         if action == "validate":
             return [*base, "--validate"]
         if action == "capture":

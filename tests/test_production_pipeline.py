@@ -399,6 +399,28 @@ def test_operation_manager_builds_allowlisted_argument_array():
         manager._command("arbitrary_shell", {})
 
 
+def test_console_self_check_uses_only_loopback_dashboard_url():
+    manager = OperationManager(Path.cwd(), Path("config.yaml"))
+    command = manager._command(
+        "self_check",
+        {
+            "endpoint": "http://127.0.0.1:9222",
+            "dashboard_base_url": "http://127.0.0.1:8765",
+        },
+    )
+    assert command[1:3] == ["-m", "app.console_validator"]
+    assert "http://127.0.0.1:8765" in command
+    assert command[-1] == "--skip-operation"
+    with pytest.raises(ValueError):
+        manager._command(
+            "self_check",
+            {
+                "endpoint": "http://127.0.0.1:9222",
+                "dashboard_base_url": "http://example.com:8765",
+            },
+        )
+
+
 def test_dependency_install_operation_requires_explicit_confirmation():
     manager = OperationManager(Path.cwd(), Path("config.yaml"))
     with pytest.raises(ValueError):
