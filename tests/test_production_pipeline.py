@@ -205,6 +205,48 @@ def test_dashboard_checks_manual_verification_every_ten_seconds():
     assert HUMAN_POLL_SECONDS == 10.0
 
 
+def test_refresh_page_binding_replaces_closed_challenge_target():
+    class Page:
+        def __init__(self, url, closed=False):
+            self.url = url
+            self.closed = closed
+            self.navigation_timeout = None
+            self.timeout = None
+
+        def is_closed(self):
+            return self.closed
+
+        def set_default_navigation_timeout(self, value):
+            self.navigation_timeout = value
+
+        def set_default_timeout(self, value):
+            self.timeout = value
+
+    old_page = Page("https://www.google.com/sorry/index", closed=True)
+    new_page = Page("https://www.google.com/search?q=done")
+    browser = GoogleImagesBrowser(SimpleNamespace(navigation_timeout_ms=30000))
+    browser.context = SimpleNamespace(pages=[new_page])
+    browser.page = old_page
+
+    assert browser.refresh_page_binding()
+    assert browser.page is new_page
+    assert new_page.navigation_timeout == 30000
+    assert new_page.timeout == 10000
+
+
+def test_refresh_page_binding_keeps_live_target():
+    page = SimpleNamespace(
+        url="https://www.google.com/search?q=current",
+        is_closed=lambda: False,
+    )
+    browser = GoogleImagesBrowser(SimpleNamespace(navigation_timeout_ms=30000))
+    browser.context = SimpleNamespace(pages=[page])
+    browser.page = page
+
+    assert not browser.refresh_page_binding()
+    assert browser.page is page
+
+
 def test_dashboard_classifies_cdp_tabs_without_query_details():
     assert classify_cdp_page_urls(["https://images.google.com/search?q=private"]) == "normal"
     assert classify_cdp_page_urls(["https://www.google.com/sorry/index?q=token"]) == "challenge"

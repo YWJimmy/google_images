@@ -211,6 +211,7 @@ class ChromeSlot:
             if self.stop_event.wait(HUMAN_POLL_SECONDS):
                 return False
             try:
+                browser.refresh_page_binding()
                 page_state, _ = browser.page_state()
             except Exception:
                 page_state = "unknown"

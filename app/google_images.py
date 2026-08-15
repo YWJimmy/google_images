@@ -855,6 +855,30 @@ class GoogleImagesBrowser:
         except Exception:
             return ""
 
+    def refresh_page_binding(self) -> bool:
+        """Rebind when completing a challenge replaces the original tab target."""
+        if not self.context:
+            return False
+        try:
+            pages = list(self.context.pages)
+            current_is_live = bool(
+                self.page
+                and not self.page.is_closed()
+                and self.page in pages
+            )
+            if current_is_live:
+                return False
+            google_pages = [page for page in pages if is_google_host(hostname(page.url))]
+            replacement = google_pages[-1] if google_pages else (pages[-1] if pages else None)
+            if replacement is None:
+                return False
+            self.page = replacement
+            self.page.set_default_navigation_timeout(self.cfg.navigation_timeout_ms)
+            self.page.set_default_timeout(10000)
+            return True
+        except Exception:
+            return False
+
     def _page_state(self) -> tuple[str, str | None]:
         """Return (state, reason), where state is normal/challenge/consent."""
         if not self.page:
