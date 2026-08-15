@@ -7,6 +7,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -18,7 +19,14 @@ import webbrowser
 
 from .config import Config, load_config
 from .chrome_profile_tool import DEFAULT_START_URL, DedicatedChromeProfiles, endpoint_online
-from .clash_controller import ClashController, masked_proxy_egress
+from .collection_telemetry import CollectionTelemetry, telemetry_path
+from .clash_controller import (
+    ClashController,
+    masked_proxy_egress,
+    validate_local_http_url,
+    validate_secret,
+)
+from .secret_store import DashboardSecretStore
 from .error_codes import describe
 from .google_images import (
     BrowserLaunchError,
@@ -113,6 +121,12 @@ class ChromeSlot:
         self.next_human_poll_at: float | None = None
         self.message = ""
         self.manual_navigation_state = "idle"
+        self.telemetry = CollectionTelemetry(telemetry_path(cfg.log_dir))
+        self.telemetry_run_id: str | None = None
+        self.telemetry_error = ""
+        self.search_attempt_count = 0
+        self.verification_count = 0
+        self._previous_search_started: float | None = None
 
     @property
     def active(self) -> bool:
@@ -160,6 +174,10 @@ class ChromeSlot:
                 "next_human_poll_seconds": remaining,
                 "message": self.message,
                 "manual_navigation_state": self.manual_navigation_state,
+                "telemetry_run_id": self.telemetry_run_id,
+                "telemetry_error": self.telemetry_error,
+                "search_attempt_count": self.search_attempt_count,
+                "verification_count": self.verification_count,
                 "tasks": [dict(task) for task in self.tasks],
             }
 
@@ -197,6 +215,22 @@ class ChromeSlot:
             self.page_state = "unknown"
             self.run_state = "starting"
             self.message = ""
+            self.telemetry_error = ""
+            self.search_attempt_count = 0
+            self.verification_count = 0
+            self._previous_search_started = None
+            try:
+                self.telemetry_run_id = self.telemetry.start_run(
+                    mode="dashboard_cdp",
+                    requested_count=len(source_tasks),
+                    start_index=start_index,
+                    configured_delay_seconds=post_delay,
+                    chrome_id=self.id,
+                    session_mode="manual_cdp",
+                )
+            except Exception as exc:
+                self.telemetry_run_id = None
+                self.telemetry_error = type(exc).__name__
             self.worker = threading.Thread(
                 target=self._run,
                 args=(source_tasks, max_results, post_delay, start_index),
@@ -260,7 +294,24 @@ class ChromeSlot:
                 with self.lock:
                     self.current_index = index
                 while not self.stop_event.is_set():
-                    self._set_task(index, status="searching", attempts=self.tasks[index - 1]["attempts"] + 1)
+                    task_attempt_number = self.tasks[index - 1]["attempts"] + 1
+                    self._set_task(index, status="searching", attempts=task_attempt_number)
+                    search_started = time.monotonic()
+                    actual_start_gap_ms = (
+                        round((search_started - self._previous_search_started) * 1000)
+                        if self._previous_search_started is not None
+                        else None
+                    )
+                    self._previous_search_started = search_started
+                    self.search_attempt_count += 1
+                    search_sequence_number = self.search_attempt_count
+                    if self.telemetry_run_id:
+                        try:
+                            self.telemetry.update_attempt_count(
+                                self.telemetry_run_id, search_sequence_number
+                            )
+                        except Exception as exc:
+                            self.telemetry_error = type(exc).__name__
                     started = time.perf_counter()
                     try:
                         _google_url, items, elapsed_ms = browser.search(task.keyword, max_results)
@@ -289,6 +340,22 @@ class ChromeSlot:
                         break
                     except (ChallengeDetected, ConsentRequired) as exc:
                         waiting_state = "challenge" if isinstance(exc, ChallengeDetected) else "consent"
+                        self.verification_count += 1
+                        if self.telemetry_run_id:
+                            try:
+                                self.telemetry.record_human_verification(
+                                    run_id=self.telemetry_run_id,
+                                    event_type=waiting_state,
+                                    task_index=index,
+                                    search_sequence_number=search_sequence_number,
+                                    task_attempt_number=task_attempt_number,
+                                    completed_before=self.completed_count,
+                                    actual_start_gap_ms=actual_start_gap_ms,
+                                    configured_delay_seconds=post_delay,
+                                    chrome_id=self.id,
+                                )
+                            except Exception as telemetry_exc:
+                                self.telemetry_error = type(telemetry_exc).__name__
                         self._set_task(index, status="waiting_for_human", message=str(exc))
                         with self.lock:
                             self.run_state = "waiting_for_human"
@@ -340,6 +407,20 @@ class ChromeSlot:
                     if current["status"] in {"pending", "searching", "waiting_for_human"}:
                         current["status"] = "stopped"
                         current["status_label"] = TASK_LABELS["stopped"]
+                telemetry_status = self.run_state
+                telemetry_completed = self.completed_count
+                telemetry_attempts = self.search_attempt_count
+            if self.telemetry_run_id:
+                try:
+                    self.telemetry.finish_run(
+                        self.telemetry_run_id,
+                        status=telemetry_status,
+                        completed_count=telemetry_completed,
+                        search_attempt_count=telemetry_attempts,
+                    )
+                except Exception as exc:
+                    with self.lock:
+                        self.telemetry_error = type(exc).__name__
 
     def navigate_for_history(self, url: str) -> None:
         value = validate_history_url(url)
@@ -414,6 +495,11 @@ class OperationManager:
         self.output = ""
         self.message = ""
         self.target_endpoint: str | None = None
+        self.started_monotonic: float | None = None
+        self.last_activity_at: str | None = None
+        self.progress_current: int | None = None
+        self.progress_total: int | None = None
+        self.progress_status = ""
 
     @property
     def active(self) -> bool:
@@ -432,6 +518,15 @@ class OperationManager:
                 "output": self.output,
                 "message": self.message,
                 "target_endpoint": self.target_endpoint,
+                "elapsed_seconds": (
+                    int(time.monotonic() - self.started_monotonic)
+                    if self.active and self.started_monotonic is not None
+                    else None
+                ),
+                "last_activity_at": self.last_activity_at,
+                "progress_current": self.progress_current,
+                "progress_total": self.progress_total,
+                "progress_status": self.progress_status,
             }
 
     def _positive_int(self, payload: dict, key: str, default: int, maximum: int) -> int:
@@ -502,6 +597,13 @@ class OperationManager:
                 if payload.get("endpoint")
                 else None
             )
+            self.started_monotonic = time.monotonic()
+            self.last_activity_at = self.started_at
+            self.progress_current = 0 if action in {"source_test", "daily_run"} else None
+            self.progress_total = (
+                int(payload.get("limit", 10)) if action in {"source_test", "daily_run"} else None
+            )
+            self.progress_status = "正在启动"
             self.worker = threading.Thread(
                 target=self._run, args=(command,), name=f"operation-{action}", daemon=True
             )
@@ -530,12 +632,15 @@ class OperationManager:
             assert process.stdout is not None
             for line in process.stdout:
                 with self.lock:
-                    self.output = (self.output + line)[-50000:]
+                    self._consume_output_line(line)
             return_code = process.wait()
             with self.lock:
                 self.return_code = return_code
                 self.status = "complete" if return_code == 0 else "error"
                 self.message = "操作完成" if return_code == 0 else f"操作退出码：{return_code}"
+                if return_code == 0 and self.progress_total is not None:
+                    self.progress_current = self.progress_total
+                    self.progress_status = "已完成"
         except Exception as exc:
             with self.lock:
                 self.status = "error"
@@ -544,6 +649,27 @@ class OperationManager:
             with self.lock:
                 self.process = None
                 self.finished_at = datetime.now().isoformat(timespec="seconds")
+
+    def _consume_output_line(self, line: str) -> None:
+        """Update visible output and progress from one unbuffered child-process line."""
+        self.last_activity_at = datetime.now().isoformat(timespec="seconds")
+        structured = re.match(r"@@PROGRESS\s+(\d+)\s+(\d+)\s+(.+)", line.strip())
+        logged = re.search(r"\[(\d+)/(\d+)\]", line)
+        if structured:
+            self.progress_current = int(structured.group(1))
+            self.progress_total = int(structured.group(2))
+            self.progress_status = structured.group(3)[:120]
+            visible = (
+                f"进度 {self.progress_current}/{self.progress_total}"
+                f" · {self.progress_status}\n"
+            )
+            self.output = (self.output + visible)[-50000:]
+            return
+        if logged:
+            self.progress_current = int(logged.group(1))
+            self.progress_total = int(logged.group(2))
+            self.progress_status = "正在处理"
+        self.output = (self.output + line)[-50000:]
 
     def stop(self) -> None:
         with self.lock:
@@ -565,6 +691,7 @@ class DashboardManager:
         self.stop_event = threading.Event()
         self.operations = OperationManager(self.root, self.config_path)
         self.profile_manager = DedicatedChromeProfiles(self.root)
+        self.secret_store = DashboardSecretStore(self.root / "private" / "dashboard_secrets.json")
         self._load_registry()
         self.monitor = threading.Thread(target=self._monitor, daemon=True)
         self.monitor.start()
@@ -650,6 +777,17 @@ class DashboardManager:
             if str(item.get("port", "")).isdigit()
         ]
 
+    def profile_suggestion(self) -> dict:
+        names = {str(item.get("name", "")) for item in self.profile_manager.entries()}
+        index = 1
+        while f"manual_{index:02d}" in names:
+            index += 1
+        return {
+            "name": f"manual_{index:02d}",
+            "port": self.profile_manager.suggest_port(),
+            "url": DEFAULT_START_URL,
+        }
+
     def create_profile(self, name: str, port: int | None, url: str) -> dict:
         selected_port = port if port is not None else self.profile_manager.suggest_port()
         entry = self.profile_manager.create(name, selected_port, register_dashboard=False)
@@ -721,8 +859,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parts.path == "/api/profiles":
             self._json({"profiles": self.server.manager.profiles()})
             return
+        if parts.path == "/api/profiles/suggest":
+            self._json(self.server.manager.profile_suggestion())
+            return
         if parts.path == "/api/operations":
             self._json(self.server.manager.operations.snapshot())
+            return
+        if parts.path == "/api/settings":
+            self._json(self.server.manager.secret_store.public_settings())
             return
         self._json({"error": "not found"}, 404)
 
@@ -760,16 +904,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True})
                 return
             if self.path == "/api/clash/status":
+                secret = self.server.manager.secret_store.clash_secret(str(payload.get("secret", "")))
                 controller = ClashController(
                     str(payload.get("endpoint", "http://127.0.0.1:9097")),
-                    str(payload.get("secret", "")),
+                    secret,
                 )
                 self._json(controller.status())
                 return
             if self.path == "/api/clash/switch":
+                secret = self.server.manager.secret_store.clash_secret(str(payload.get("secret", "")))
                 controller = ClashController(
                     str(payload.get("endpoint", "http://127.0.0.1:9097")),
-                    str(payload.get("secret", "")),
+                    secret,
                 )
                 result = controller.switch(
                     str(payload.get("group", "")), str(payload.get("node", ""))
@@ -778,6 +924,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/clash/egress":
                 self._json(masked_proxy_egress(str(payload.get("proxy_url", "http://127.0.0.1:7897"))))
+                return
+            if self.path == "/api/settings/clash/save":
+                secret = validate_secret(str(payload.get("secret", "")))
+                endpoint = validate_local_http_url(
+                    str(payload.get("endpoint", "http://127.0.0.1:9097")), "controller endpoint"
+                )
+                proxy_url = validate_local_http_url(
+                    str(payload.get("proxy_url", "http://127.0.0.1:7897")), "proxy URL"
+                )
+                self.server.manager.secret_store.save_clash(secret, endpoint, proxy_url)
+                self._json({"ok": True})
+                return
+            if self.path == "/api/settings/clash/clear":
+                self.server.manager.secret_store.clear_clash()
+                self._json({"ok": True})
                 return
             slot = self.server.manager.get(str(payload.get("chrome_id", "")) or None)
             if self.path == "/api/start":

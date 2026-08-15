@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from .collection_telemetry import CollectionTelemetry, telemetry_path
 from .config import Config
 from .models import ImageItem, KeywordTask
 from .ranking import domain_matches, hostname, is_google_host
@@ -629,6 +630,7 @@ class GoogleImagesBrowser:
         max_results: int,
         time_budget_seconds: float,
         post_search_delay_seconds: float = 0,
+        progress_callback=None,
     ) -> tuple[dict, Path]:
         """Run a DOM-only bounded source-domain test over multiple samples."""
         if not self.page or not self.context:
@@ -640,6 +642,20 @@ class GoogleImagesBrowser:
         stopped_reason = None
         previous_sample_started: float | None = None
         previous_sample_finished: float | None = None
+        telemetry = CollectionTelemetry(
+            telemetry_path(getattr(self.cfg, "log_dir", directory.parent))
+        )
+        telemetry_run_id: str | None = None
+        telemetry_error: str | None = None
+        try:
+            telemetry_run_id = telemetry.start_run(
+                mode="source_domain_test",
+                requested_count=len(tasks),
+                configured_delay_seconds=post_search_delay_seconds,
+                session_mode=getattr(self.cfg, "session_mode", None),
+            )
+        except Exception as exc:
+            telemetry_error = type(exc).__name__
 
         for sample_index, task in enumerate(tasks, start=1):
             if previous_sample_finished is not None:
@@ -691,6 +707,11 @@ class GoogleImagesBrowser:
                 "sample_time_budget_seconds": round(fair_share_seconds, 3),
             }
             previous_sample_started = sample_started
+            if telemetry_run_id:
+                try:
+                    telemetry.update_attempt_count(telemetry_run_id, sample_index)
+                except Exception as exc:
+                    telemetry_error = type(exc).__name__
             try:
                 self._navigate_to_search(task.keyword, max_results)
                 self._assert_normal_page()
@@ -758,9 +779,37 @@ class GoogleImagesBrowser:
             except ChallengeDetected:
                 sample["status"] = "challenge"
                 stopped_reason = "challenge"
+                if telemetry_run_id:
+                    try:
+                        telemetry.record_human_verification(
+                            run_id=telemetry_run_id,
+                            event_type="challenge",
+                            task_index=sample_index,
+                            search_sequence_number=sample_index,
+                            task_attempt_number=1,
+                            completed_before=sample_index - 1,
+                            actual_start_gap_ms=sample["start_gap_ms"],
+                            configured_delay_seconds=post_search_delay_seconds,
+                        )
+                    except Exception as exc:
+                        telemetry_error = type(exc).__name__
             except ConsentRequired:
                 sample["status"] = "consent"
                 stopped_reason = "consent"
+                if telemetry_run_id:
+                    try:
+                        telemetry.record_human_verification(
+                            run_id=telemetry_run_id,
+                            event_type="consent",
+                            task_index=sample_index,
+                            search_sequence_number=sample_index,
+                            task_attempt_number=1,
+                            completed_before=sample_index - 1,
+                            actual_start_gap_ms=sample["start_gap_ms"],
+                            configured_delay_seconds=post_search_delay_seconds,
+                        )
+                    except Exception as exc:
+                        telemetry_error = type(exc).__name__
             except PlaywrightTimeoutError:
                 sample["navigation_ms"] = self.cfg.search_parse_timeout_ms
                 sample["search_parse_ms"] = self.cfg.search_parse_timeout_ms
@@ -772,6 +821,8 @@ class GoogleImagesBrowser:
                 sample["elapsed_ms"] = int((time.monotonic() - sample_started) * 1000)
                 sample_reports.append(sample)
                 previous_sample_finished = time.monotonic()
+                if progress_callback is not None:
+                    progress_callback(sample_index, len(tasks), str(sample["status"]))
             if stopped_reason in {"challenge", "consent", "time_budget_exhausted"}:
                 break
 
@@ -792,6 +843,17 @@ class GoogleImagesBrowser:
             result_code, result_type, process_exit_code = -5, "SOURCE_TEST_INCOMPLETE", 5
         else:
             result_code, result_type, process_exit_code = 0, "SOURCE_TEST_COMPLETE", 0
+
+        if telemetry_run_id:
+            try:
+                telemetry.finish_run(
+                    telemetry_run_id,
+                    status=stopped_reason or ("complete" if process_exit_code == 0 else "incomplete"),
+                    completed_count=len(sample_reports),
+                    search_attempt_count=len(sample_reports),
+                )
+            except Exception as exc:
+                telemetry_error = type(exc).__name__
 
         report = {
             "generated_at": timestamp.isoformat(timespec="seconds"),
@@ -814,6 +876,10 @@ class GoogleImagesBrowser:
                 "full_urls_recorded": False,
                 "goto_tokens_recorded": False,
                 "cookie_values_recorded": False,
+            },
+            "telemetry": {
+                "run_id": telemetry_run_id,
+                "recording_error": telemetry_error,
             },
             "summary": {
                 "samples_started": len(sample_reports),

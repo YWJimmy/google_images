@@ -155,8 +155,11 @@ def test_source_test_default_post_search_delay_is_six_seconds(monkeypatch):
         def start(self):
             return self
 
-        def test_top_image_sources(self, _directory, _tasks, _maximum, _budget, delay):
+        def test_top_image_sources(
+            self, _directory, _tasks, _maximum, _budget, delay, progress_callback=None
+        ):
             captured["delay"] = delay
+            captured["progress_callback"] = progress_callback
             return {"process_exit_code": 0}, SimpleNamespace()
 
         def close(self):
@@ -169,6 +172,7 @@ def test_source_test_default_post_search_delay_is_six_seconds(monkeypatch):
     monkeypatch.setattr("builtins.print", lambda *_args, **_kwargs: None)
     main_module.main()
     assert captured["delay"] == 6
+    assert callable(captured["progress_callback"])
 
 
 def test_post_search_delay_starts_six_seconds_after_completion():
@@ -279,7 +283,8 @@ def test_dashboard_resume_start_marks_prior_samples_without_rerunning(monkeypatc
     monkeypatch.setattr("app.dashboard.load_tasks", lambda _path, _limit: tasks)
     dashboard = __import__("app.dashboard", fromlist=["ChromeSlot"])
     slot = dashboard.ChromeSlot(
-        "test", "test", "http://127.0.0.1:9222", SimpleNamespace(input_csv=Path("input.csv"))
+        "test", "test", "http://127.0.0.1:9222",
+        SimpleNamespace(input_csv=Path("input.csv"), log_dir=Path("logs"))
     )
     monkeypatch.setattr(slot, "_run", lambda *_args: None)
 
@@ -294,7 +299,8 @@ def test_human_wait_uses_cdp_state_then_reconnects_playwright(monkeypatch):
     dashboard = __import__("app.dashboard", fromlist=["ChromeSlot"])
     monkeypatch.setattr(dashboard, "HUMAN_POLL_SECONDS", 0)
     slot = dashboard.ChromeSlot(
-        "test", "test", "http://127.0.0.1:9222", SimpleNamespace(input_csv=Path("input.csv"))
+        "test", "test", "http://127.0.0.1:9222",
+        SimpleNamespace(input_csv=Path("input.csv"), log_dir=Path("logs"))
     )
     monkeypatch.setattr(slot, "_read_cdp_page_state", lambda: "normal")
 
@@ -342,3 +348,13 @@ def test_dependency_install_operation_requires_explicit_confirmation():
         "install", {"endpoint": "http://127.0.0.1:9222", "confirmed": True}
     )
     assert command[1:4] == ["-m", "pip", "install"]
+
+
+def test_operation_manager_parses_structured_progress_without_exposing_marker():
+    manager = OperationManager(Path.cwd(), Path("config.yaml"))
+    manager._consume_output_line("@@PROGRESS 4 10 completed\n")
+
+    assert manager.progress_current == 4
+    assert manager.progress_total == 10
+    assert manager.progress_status == "completed"
+    assert manager.output == "进度 4/10 · completed\n"

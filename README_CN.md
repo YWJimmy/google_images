@@ -489,7 +489,9 @@ python -m app.main --config config.yaml --source-domain-test --limit 10 --test-m
 
 所有后台操作都由固定白名单映射为参数数组，不接受任意 shell 命令。一个 CDP 端点正在运行可视化排名任务时，不允许再对同一端点启动诊断、探针或其他控制任务。
 
-Clash API 密钥只保留在当前页面输入框，并随单次本机请求发送到 `127.0.0.1` 控制器；服务端不保存密钥、完整公网 IP 或节点信息。网络控制器不会订阅 challenge 事件，也不会自动切换节点。Google 出现验证时仍暂停，由用户人工检查、决定是否手动切换并完成验证。
+Clash API 密钥可只用于当前页面，也可保存到被 Git 忽略的 `private/dashboard_secrets.json`。保存时使用 Windows DPAPI 按当前用户加密，服务端接口不会把密钥回传给页面。网络控制器不会订阅 challenge 事件，也不会自动切换节点。Google 出现验证时仍暂停，由用户人工检查、决定是否手动切换并完成验证。
+
+完整的页面功能、密钥位置、专用 Chrome 简化流程和故障排查见 [`CONSOLE_GUIDE_CN.md`](CONSOLE_GUIDE_CN.md)。
 
 ### 创建多个专用 Chrome Profile
 

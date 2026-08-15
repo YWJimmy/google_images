@@ -30,6 +30,8 @@ htmlcov/
 # Browser profiles and automation artifacts (cookies, sessions, traces)
 profile/
 private/
+dashboard_secrets.json
+*.dpapi.json
 google_state.json
 *.storage-state.json
 *.storage_state.json

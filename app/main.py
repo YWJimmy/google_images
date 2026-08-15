@@ -117,6 +117,9 @@ def main():
                 args.test_max_results,
                 args.test_time_budget_seconds,
                 args.test_post_search_delay_seconds,
+                lambda current, total, status: print(
+                    f"@@PROGRESS {current} {total} {status}", flush=True
+                ),
             )
             print(json.dumps(report, ensure_ascii=False, indent=2))
             print(f"Source-domain test report saved to: {path}")
