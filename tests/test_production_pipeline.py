@@ -8,6 +8,7 @@ from app.config import _as_bool
 from app import main as main_module
 from app.dashboard import (
     HUMAN_POLL_SECONDS,
+    OperationManager,
     classify_cdp_page_urls,
     validate_history_url,
     validate_local_cdp_endpoint,
@@ -313,3 +314,31 @@ def test_dashboard_classifies_cdp_tabs_without_query_details():
     assert classify_cdp_page_urls(["https://www.google.com/sorry/index?q=token"]) == "challenge"
     assert classify_cdp_page_urls(["https://consent.google.com/m"]) == "consent"
     assert classify_cdp_page_urls(["http://127.0.0.1:8765/"]) == "other"
+
+
+def test_operation_manager_builds_allowlisted_argument_array():
+    manager = OperationManager(Path.cwd(), Path("config.yaml"))
+    command = manager._command(
+        "diagnose",
+        {
+            "endpoint": "http://127.0.0.1:9222",
+            "keyword": "Albert Einstein",
+        },
+    )
+
+    assert command[0]
+    assert command[1:3] == ["-m", "app.main"]
+    assert "--diagnose" in command
+    assert command[-2:] == ["--cdp-endpoint", "http://127.0.0.1:9222"]
+    with pytest.raises(ValueError):
+        manager._command("arbitrary_shell", {})
+
+
+def test_dependency_install_operation_requires_explicit_confirmation():
+    manager = OperationManager(Path.cwd(), Path("config.yaml"))
+    with pytest.raises(ValueError):
+        manager._command("install", {"endpoint": "http://127.0.0.1:9222"})
+    command = manager._command(
+        "install", {"endpoint": "http://127.0.0.1:9222", "confirmed": True}
+    )
+    assert command[1:4] == ["-m", "pip", "install"]

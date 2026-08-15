@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+from datetime import datetime
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import os
+import subprocess
+import sys
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -13,6 +17,7 @@ import uuid
 import webbrowser
 
 from .config import Config, load_config
+from .chrome_profile_tool import DEFAULT_START_URL, DedicatedChromeProfiles, endpoint_online
 from .error_codes import describe
 from .google_images import (
     BrowserLaunchError,
@@ -373,13 +378,192 @@ class ChromeSlot:
             browser.close()
 
 
+OPERATION_LABELS = {
+    "validate": "校验配置",
+    "capture": "捕获人工状态",
+    "diagnose": "环境诊断",
+    "probe": "单图片结构探针",
+    "source_test": "Top-N 来源测试",
+    "daily_run": "正式排名任务",
+    "install": "安装或修复依赖",
+}
+
+
+def _bounded_text(value: object, name: str, limit: int = 200) -> str:
+    text = str(value or "").strip()
+    if len(text) > limit or any(ord(char) < 32 for char in text):
+        raise ValueError(f"invalid {name}")
+    return text
+
+
+class OperationManager:
+    """Run a fixed allowlist of local project operations without shell expansion."""
+
+    def __init__(self, root: Path, config_path: Path):
+        self.root = root.resolve()
+        self.config_path = config_path.resolve()
+        self.lock = threading.RLock()
+        self.process: subprocess.Popen | None = None
+        self.worker: threading.Thread | None = None
+        self.action = ""
+        self.status = "idle"
+        self.started_at: str | None = None
+        self.finished_at: str | None = None
+        self.return_code: int | None = None
+        self.output = ""
+        self.message = ""
+        self.target_endpoint: str | None = None
+
+    @property
+    def active(self) -> bool:
+        return bool(self.worker and self.worker.is_alive())
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            return {
+                "active": self.active,
+                "action": self.action,
+                "action_label": OPERATION_LABELS.get(self.action, self.action),
+                "status": self.status,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+                "return_code": self.return_code,
+                "output": self.output,
+                "message": self.message,
+                "target_endpoint": self.target_endpoint,
+            }
+
+    def _positive_int(self, payload: dict, key: str, default: int, maximum: int) -> int:
+        value = int(payload.get(key, default))
+        if not 1 <= value <= maximum:
+            raise ValueError(f"{key} must be between 1 and {maximum}")
+        return value
+
+    def _command(self, action: str, payload: dict) -> list[str]:
+        if action not in OPERATION_LABELS:
+            raise ValueError("unknown operation")
+        base = [sys.executable, "-m", "app.main", "--config", str(self.config_path)]
+        endpoint = validate_local_cdp_endpoint(str(payload.get("endpoint", "http://127.0.0.1:9222")))
+        if action == "validate":
+            return [*base, "--validate"]
+        if action == "capture":
+            return [*base, "--capture-state", "--cdp-endpoint", endpoint]
+        if action == "diagnose":
+            keyword = _bounded_text(payload.get("keyword", "Albert Einstein"), "keyword")
+            return [*base, "--diagnose", "--diagnose-keyword", keyword, "--cdp-endpoint", endpoint]
+        if action == "probe":
+            keyword = _bounded_text(payload.get("keyword", "Albert Einstein"), "keyword")
+            return [*base, "--probe-first-image", "--probe-keyword", keyword, "--cdp-endpoint", endpoint]
+        if action == "source_test":
+            limit = self._positive_int(payload, "limit", 10, 1000)
+            top_n = self._positive_int(payload, "max_results", 100, 100)
+            budget = self._positive_int(payload, "time_budget_seconds", 300, 86400)
+            delay = float(payload.get("post_search_delay_seconds", 6))
+            if not 0 <= delay <= 3600:
+                raise ValueError("post_search_delay_seconds must be between 0 and 3600")
+            return [
+                *base,
+                "--source-domain-test",
+                "--limit",
+                str(limit),
+                "--test-max-results",
+                str(top_n),
+                "--test-time-budget-seconds",
+                str(budget),
+                "--test-post-search-delay-seconds",
+                str(delay),
+                "--cdp-endpoint",
+                endpoint,
+            ]
+        if action == "daily_run":
+            limit = self._positive_int(payload, "limit", 100, 1000)
+            return [*base, "--limit", str(limit), "--cdp-endpoint", endpoint]
+        if action == "install":
+            if payload.get("confirmed") is not True:
+                raise ValueError("dependency installation requires confirmation")
+            return [sys.executable, "-m", "pip", "install", "-r", str(self.root / "requirements.txt")]
+        raise ValueError("unknown operation")
+
+    def start(self, action: str, payload: dict) -> None:
+        command = self._command(action, payload)
+        with self.lock:
+            if self.active:
+                raise ValueError("another operation is already running")
+            self.action = action
+            self.status = "starting"
+            self.started_at = datetime.now().isoformat(timespec="seconds")
+            self.finished_at = None
+            self.return_code = None
+            self.output = ""
+            self.message = ""
+            self.target_endpoint = (
+                validate_local_cdp_endpoint(str(payload["endpoint"]))
+                if payload.get("endpoint")
+                else None
+            )
+            self.worker = threading.Thread(
+                target=self._run, args=(command,), name=f"operation-{action}", daemon=True
+            )
+            self.worker.start()
+
+    def _run(self, command: list[str]) -> None:
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            environment = dict(os.environ)
+            environment["PYTHONIOENCODING"] = "utf-8"
+            environment["PYTHONUNBUFFERED"] = "1"
+            process = subprocess.Popen(
+                command,
+                cwd=str(self.root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=flags,
+                env=environment,
+            )
+            with self.lock:
+                self.process = process
+                self.status = "running"
+            assert process.stdout is not None
+            for line in process.stdout:
+                with self.lock:
+                    self.output = (self.output + line)[-50000:]
+            return_code = process.wait()
+            with self.lock:
+                self.return_code = return_code
+                self.status = "complete" if return_code == 0 else "error"
+                self.message = "操作完成" if return_code == 0 else f"操作退出码：{return_code}"
+        except Exception as exc:
+            with self.lock:
+                self.status = "error"
+                self.message = type(exc).__name__
+        finally:
+            with self.lock:
+                self.process = None
+                self.finished_at = datetime.now().isoformat(timespec="seconds")
+
+    def stop(self) -> None:
+        with self.lock:
+            process = self.process
+            if not process or process.poll() is not None:
+                raise ValueError("no operation is running")
+            self.status = "stopping"
+            process.terminate()
+
+
 class DashboardManager:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, config_path: Path | None = None):
         self.cfg = cfg
+        self.config_path = (config_path or Path("config.yaml")).resolve()
+        self.root = self.config_path.parent
         self.registry_path = cfg.storage_state_path.parent / "dashboard_chromes.json"
         self.lock = threading.RLock()
         self.slots: dict[str, ChromeSlot] = {}
         self.stop_event = threading.Event()
+        self.operations = OperationManager(self.root, self.config_path)
+        self.profile_manager = DedicatedChromeProfiles(self.root)
         self._load_registry()
         self.monitor = threading.Thread(target=self._monitor, daemon=True)
         self.monitor.start()
@@ -450,7 +634,48 @@ class DashboardManager:
             for slot in self.slots.values()
         ]
         data["selected_id"] = selected.id
+        data["operation"] = self.operations.snapshot()
         return data
+
+    def profiles(self) -> list[dict]:
+        return [
+            {
+                "name": str(item.get("name", "")),
+                "port": int(item.get("port", 0)),
+                "endpoint": f"http://127.0.0.1:{int(item.get('port', 0))}",
+                "online": endpoint_online(int(item.get("port", 0))),
+            }
+            for item in self.profile_manager.entries()
+            if str(item.get("port", "")).isdigit()
+        ]
+
+    def create_profile(self, name: str, port: int | None, url: str) -> dict:
+        selected_port = port if port is not None else self.profile_manager.suggest_port()
+        entry = self.profile_manager.create(name, selected_port, register_dashboard=False)
+        endpoint = f"http://127.0.0.1:{entry['port']}"
+        with self.lock:
+            existing = next((slot for slot in self.slots.values() if slot.endpoint == endpoint), None)
+            if existing:
+                existing.label = f"专用 Chrome {entry['name']}"
+                self._save_registry()
+                slot = existing
+            else:
+                slot = self.add_slot(f"专用 Chrome {entry['name']}", endpoint)
+        launch_state = self.profile_manager.launch(entry, url)
+        return {"chrome_id": slot.id, "launch_state": launch_state, **entry}
+
+    def start_profile(self, name: str, url: str) -> dict:
+        entry = self.profile_manager.get(name)
+        return {"launch_state": self.profile_manager.launch(entry, url), **entry}
+
+    def start_operation(self, action: str, payload: dict) -> None:
+        endpoint = payload.get("endpoint")
+        if endpoint:
+            normalized = validate_local_cdp_endpoint(str(endpoint))
+            matching = next((slot for slot in self.slots.values() if slot.endpoint == normalized), None)
+            if matching and matching.active:
+                raise ValueError("selected Chrome already has an active dashboard task")
+        self.operations.start(action, payload)
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -492,6 +717,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             slot_id = parse_qs(parts.query).get("chrome_id", [None])[0]
             self._json(self.server.manager.status(slot_id))
             return
+        if parts.path == "/api/profiles":
+            self._json({"profiles": self.server.manager.profiles()})
+            return
+        if parts.path == "/api/operations":
+            self._json(self.server.manager.operations.snapshot())
+            return
         self._json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -503,8 +734,35 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 )
                 self._json({"ok": True, "chrome_id": slot.id})
                 return
+            if self.path == "/api/profiles/create":
+                raw_port = payload.get("port")
+                result = self.server.manager.create_profile(
+                    str(payload.get("name", "")),
+                    int(raw_port) if raw_port not in {None, ""} else None,
+                    str(payload.get("url", DEFAULT_START_URL)),
+                )
+                self._json({"ok": True, **result})
+                return
+            if self.path == "/api/profiles/start":
+                result = self.server.manager.start_profile(
+                    str(payload.get("name", "")),
+                    str(payload.get("url", DEFAULT_START_URL)),
+                )
+                self._json({"ok": True, **result})
+                return
+            if self.path == "/api/operations/start":
+                self.server.manager.start_operation(str(payload.get("action", "")), payload)
+                self._json({"ok": True})
+                return
+            if self.path == "/api/operations/stop":
+                self.server.manager.operations.stop()
+                self._json({"ok": True})
+                return
             slot = self.server.manager.get(str(payload.get("chrome_id", "")) or None)
             if self.path == "/api/start":
+                operation = self.server.manager.operations.snapshot()
+                if operation["active"] and operation["target_endpoint"] == slot.endpoint:
+                    raise ValueError("selected Chrome is busy with another operation")
                 limit = int(payload.get("limit", 50))
                 max_results = int(payload.get("max_results", 100))
                 delay = float(payload.get("post_search_delay_seconds", 6))
@@ -542,7 +800,7 @@ def main() -> None:
     if args.host not in LOCAL_CDP_HOSTS:
         raise SystemExit("dashboard host must be loopback-only")
     cfg = load_config(args.config)
-    manager = DashboardManager(cfg)
+    manager = DashboardManager(cfg, Path(args.config))
     server = DashboardServer((args.host, args.port), manager)
     url = f"http://{args.host}:{args.port}/"
     print(f"Dashboard: {url}")

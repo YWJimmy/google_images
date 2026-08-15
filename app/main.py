@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+from dataclasses import replace
 import json
 from .config import load_config
 from .google_images import BrowserLaunchError, GoogleImagesBrowser
@@ -27,14 +28,16 @@ def main():
         help="fixed delay after one test search finishes before the next starts",
     )
     ap.add_argument("--capture-state", action="store_true", help="capture state from a manually opened Chrome")
-    ap.add_argument("--cdp-endpoint", default="http://127.0.0.1:9222")
+    ap.add_argument("--cdp-endpoint")
     args = ap.parse_args()
     if args.limit is not None and args.limit <= 0:
         ap.error("--limit must be > 0")
     cfg = load_config(args.config)
+    if args.cdp_endpoint:
+        cfg = replace(cfg, cdp_endpoint=args.cdp_endpoint)
     if args.capture_state:
         try:
-            summary = capture_google_state(args.cdp_endpoint, cfg.storage_state_path)
+            summary = capture_google_state(cfg.cdp_endpoint, cfg.storage_state_path)
         except StateCaptureError as exc:
             print(f"State capture failed: {exc}")
             raise SystemExit(3) from None
