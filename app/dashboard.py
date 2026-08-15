@@ -18,6 +18,7 @@ import webbrowser
 
 from .config import Config, load_config
 from .chrome_profile_tool import DEFAULT_START_URL, DedicatedChromeProfiles, endpoint_online
+from .clash_controller import ClashController, masked_proxy_egress
 from .error_codes import describe
 from .google_images import (
     BrowserLaunchError,
@@ -757,6 +758,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if self.path == "/api/operations/stop":
                 self.server.manager.operations.stop()
                 self._json({"ok": True})
+                return
+            if self.path == "/api/clash/status":
+                controller = ClashController(
+                    str(payload.get("endpoint", "http://127.0.0.1:9097")),
+                    str(payload.get("secret", "")),
+                )
+                self._json(controller.status())
+                return
+            if self.path == "/api/clash/switch":
+                controller = ClashController(
+                    str(payload.get("endpoint", "http://127.0.0.1:9097")),
+                    str(payload.get("secret", "")),
+                )
+                result = controller.switch(
+                    str(payload.get("group", "")), str(payload.get("node", ""))
+                )
+                self._json(result)
+                return
+            if self.path == "/api/clash/egress":
+                self._json(masked_proxy_egress(str(payload.get("proxy_url", "http://127.0.0.1:7897"))))
                 return
             slot = self.server.manager.get(str(payload.get("chrome_id", "")) or None)
             if self.path == "/api/start":
