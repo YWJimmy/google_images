@@ -5,7 +5,14 @@ import time
 
 from .config import Config
 from .error_codes import describe
-from .google_images import GoogleImagesBrowser, ChallengeDetected, ConsentRequired, BrowserLaunchError, NavigationError
+from .google_images import (
+    GoogleImagesBrowser,
+    ChallengeDetected,
+    ConsentRequired,
+    BrowserLaunchError,
+    NavigationError,
+    SearchParseTimeout,
+)
 from .models import SearchResult
 from .ranking import hostname, domain_matches
 from .storage import already_done, export_csv, load_tasks, open_db, save_result
@@ -99,6 +106,8 @@ def run(cfg: Config, limit_override: int | None = None):
                 stop_run = True
             except NavigationError as exc:
                 result = SearchResult(task.keyword, task.target_domain, -2, describe(-2), message=str(exc))
+            except SearchParseTimeout as exc:
+                result = SearchResult(task.keyword, task.target_domain, -10, describe(-10), message=str(exc))
             except Exception as exc:
                 result = SearchResult(task.keyword, task.target_domain, -8, describe(-8), message=repr(exc))
 

@@ -443,7 +443,7 @@ session_mode: "persistent_profile"
 
 诊断 JSON 会记录 `images_home_url` 和 `images_home_landing_url`，用于确认 `/ncr` 是否实际生效。该设置只能固定入口域名，不能保证消除 Google challenge。
 
-首页提交后程序默认等待 `results_load_wait_ms: 4000`，再开始检查结果 DOM。诊断 JSON 的 `result_dom_summary` 只记录链接数量分类，不保存具体结果网址或页面正文。
+`results_load_wait_ms: 4000` 是结果候选的最大自适应等待时间，不再是固定暂停。程序每隔 `results_poll_interval_ms: 100` 检查一次 Top-N 图片锚点，数量达到要求并连续稳定后立即解析。`search_parse_timeout_ms: 5000` 只约束搜索导航与域名解析，不计入该自适应等待；超时任务标记为 `SEARCH_PARSE_TIMEOUT` 并继续后续任务。诊断 JSON 的 `result_dom_summary` 只记录链接数量分类，不保存具体结果网址或页面正文。
 
 单图片结构探针只点击第一个可见的 Google Images 结果，用于判断页面产生预览面板、新标签页还是外部导航：
 

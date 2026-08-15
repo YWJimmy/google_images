@@ -105,6 +105,9 @@ class BrowserLaunchError(RuntimeError):
 class NavigationError(RuntimeError):
     pass
 
+class SearchParseTimeout(RuntimeError):
+    pass
+
 class GoogleImagesBrowser:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -113,6 +116,13 @@ class GoogleImagesBrowser:
         self.context = None
         self.page = None
         self.launch_args = ["--disable-notifications"]
+        self._search_session_initialized = False
+        self.last_search_metrics = {
+            "navigation_ms": 0,
+            "results_wait_ms": 0,
+            "parse_ms": 0,
+            "search_parse_ms": 0,
+        }
 
     def start(self):
         try:
@@ -181,20 +191,63 @@ class GoogleImagesBrowser:
         self.context = None
         self.browser = None
         self.pw = None
+        self._search_session_initialized = False
 
     def _build_url(self, keyword: str) -> str:
         params = {"q": keyword, "udm": "2", "hl": self.cfg.hl, "gl": self.cfg.gl}
         return self.cfg.base_url + "?" + urlencode(params)
 
-    def _navigate_to_search(self, keyword: str) -> tuple[str, str | None]:
+    def _wait_for_result_candidates(self, expected_results: int) -> int:
+        """Wait adaptively until the Top-N candidate count is stable."""
+        started = time.perf_counter()
+        deadline = started + self.cfg.results_load_wait_ms / 1000
+        previous = -1
+        stable_rounds = 0
+        selector = 'a[href][target="_blank"]:has(img)'
+        while time.perf_counter() < deadline:
+            try:
+                count = self.page.locator(selector).count()
+            except Exception:
+                count = 0
+            if count >= expected_results and count == previous:
+                stable_rounds += 1
+                if stable_rounds >= 1:
+                    break
+            else:
+                stable_rounds = 0
+            previous = count
+            self.page.wait_for_timeout(self.cfg.results_poll_interval_ms)
+        return int((time.perf_counter() - started) * 1000)
+
+    def _navigate_to_search(
+        self, keyword: str, expected_results: int | None = None
+    ) -> tuple[str, str | None]:
         """Navigate through the configured entry point and return target/landing URLs."""
         target_url = self._build_url(keyword)
-        if self.cfg.search_navigation == "direct":
-            self.page.goto(target_url, wait_until="domcontentloaded")
-            self.page.wait_for_timeout(self.cfg.results_load_wait_ms)
+        expected_results = expected_results or self.cfg.max_results
+        navigation_timeout = min(
+            self.cfg.navigation_timeout_ms, self.cfg.search_parse_timeout_ms
+        )
+        if self.cfg.search_navigation == "direct" or self._search_session_initialized:
+            navigation_started = time.perf_counter()
+            self.page.goto(
+                target_url, wait_until="domcontentloaded", timeout=navigation_timeout
+            )
+            navigation_ms = int((time.perf_counter() - navigation_started) * 1000)
+            wait_ms = self._wait_for_result_candidates(expected_results)
+            self.last_search_metrics.update({
+                "navigation_ms": navigation_ms,
+                "results_wait_ms": wait_ms,
+                "parse_ms": 0,
+                "search_parse_ms": navigation_ms,
+            })
             return target_url, None
 
-        self.page.goto(self.cfg.images_home_url, wait_until="domcontentloaded")
+        self.page.goto(
+            self.cfg.images_home_url,
+            wait_until="domcontentloaded",
+            timeout=self.cfg.navigation_timeout_ms,
+        )
         landing_url = self.page.url
         self._assert_normal_page()
         if self.cfg.require_google_com_host and not is_expected_google_com_host(landing_url):
@@ -204,10 +257,19 @@ class GoogleImagesBrowser:
 
         search_box = self.page.locator('textarea[name="q"], input[name="q"]').first
         search_box.wait_for(state="visible", timeout=10000)
+        navigation_started = time.perf_counter()
         search_box.fill(keyword)
         search_box.press("Enter")
-        self.page.wait_for_load_state("domcontentloaded", timeout=self.cfg.navigation_timeout_ms)
-        self.page.wait_for_timeout(self.cfg.results_load_wait_ms)
+        self.page.wait_for_load_state("domcontentloaded", timeout=navigation_timeout)
+        navigation_ms = int((time.perf_counter() - navigation_started) * 1000)
+        self._search_session_initialized = True
+        wait_ms = self._wait_for_result_candidates(expected_results)
+        self.last_search_metrics.update({
+            "navigation_ms": navigation_ms,
+            "results_wait_ms": wait_ms,
+            "parse_ms": 0,
+            "search_parse_ms": navigation_ms,
+        })
         return target_url, landing_url
 
     def result_dom_summary(self) -> dict[str, object]:
@@ -479,7 +541,25 @@ class GoogleImagesBrowser:
         """Parse source domains from the loaded page without clicking results."""
         if not self.page:
             return []
-        candidates = self.page.locator('a[href]:has(img)')
+        candidates = self.page.locator('a[href][target="_blank"]:has(img)')
+        hrefs = candidates.evaluate_all(
+            "anchors => anchors.map(anchor => anchor.href || '')"
+        )
+        hrefs = [
+            str(href) for href in hrefs
+            if (
+                (hostname(str(href)) and not is_google_host(hostname(str(href))))
+                or probe_href_kind(str(href)).startswith("google_goto_")
+            )
+        ][:max_results]
+
+        # Fast path: the current Google Images variant exposes direct external
+        # hrefs, so no full-page serialization or structured-block parsing is needed.
+        if hrefs and all(
+            hostname(href) and not is_google_host(hostname(href)) for href in hrefs
+        ):
+            return parse_minimal_structured_domains("", hrefs)
+
         records = candidates.evaluate_all(
             """anchors => anchors.map(anchor => {
                 const blocks = [];
@@ -547,14 +627,35 @@ class GoogleImagesBrowser:
                 "status": "pending",
                 "resolution_methods": {},
                 "elapsed_ms": None,
+                "navigation_ms": None,
+                "results_wait_ms": None,
+                "parse_ms": None,
+                "search_parse_ms": None,
                 "sample_time_budget_seconds": round(fair_share_seconds, 3),
             }
             try:
-                self._navigate_to_search(task.keyword)
+                self._navigate_to_search(task.keyword, max_results)
                 self._assert_normal_page()
+                sample["navigation_ms"] = self.last_search_metrics["navigation_ms"]
+                sample["results_wait_ms"] = self.last_search_metrics["results_wait_ms"]
+                if self.last_search_metrics["navigation_ms"] > self.cfg.search_parse_timeout_ms:
+                    sample["status"] = "search_parse_timeout"
+                    continue
+                parse_started = time.perf_counter()
                 observations = self._structured_source_observations(max_results)
+                parse_ms = int((time.perf_counter() - parse_started) * 1000)
+                search_parse_ms = self.last_search_metrics["navigation_ms"] + parse_ms
+                self.last_search_metrics.update({
+                    "parse_ms": parse_ms,
+                    "search_parse_ms": search_parse_ms,
+                })
+                sample["parse_ms"] = parse_ms
+                sample["search_parse_ms"] = search_parse_ms
                 candidate_count = len(observations)
                 sample["candidate_count"] = candidate_count
+                if search_parse_ms > self.cfg.search_parse_timeout_ms:
+                    sample["status"] = "search_parse_timeout"
+                    continue
                 methods: Counter[str] = Counter()
 
                 unresolved_ranks: list[int] = []
@@ -602,6 +703,10 @@ class GoogleImagesBrowser:
             except ConsentRequired:
                 sample["status"] = "consent"
                 stopped_reason = "consent"
+            except PlaywrightTimeoutError:
+                sample["navigation_ms"] = self.cfg.search_parse_timeout_ms
+                sample["search_parse_ms"] = self.cfg.search_parse_timeout_ms
+                sample["status"] = "search_parse_timeout"
             except Exception as exc:
                 sample["status"] = "error"
                 sample["error_type"] = type(exc).__name__
@@ -615,6 +720,9 @@ class GoogleImagesBrowser:
         statuses = Counter(str(sample["status"]) for sample in sample_reports)
         total_attempted = sum(int(sample["attempted_count"]) for sample in sample_reports)
         total_resolved = sum(int(sample["resolved_count"]) for sample in sample_reports)
+        measured = [
+            sample for sample in sample_reports if sample.get("search_parse_ms") is not None
+        ]
         if stopped_reason == "challenge":
             result_code, result_type, process_exit_code = -4, "GOOGLE_CHALLENGE_OR_UNUSUAL_TRAFFIC", 4
         elif stopped_reason == "consent":
@@ -636,6 +744,7 @@ class GoogleImagesBrowser:
                 "sample_limit": len(tasks),
                 "max_results_per_sample": max_results,
                 "time_budget_seconds": time_budget_seconds,
+                "search_parse_timeout_ms": self.cfg.search_parse_timeout_ms,
                 "sequential_only": True,
                 "interaction_mode": "dom_only",
                 "result_clicks": 0,
@@ -654,6 +763,14 @@ class GoogleImagesBrowser:
                 "total_resolved": total_resolved,
                 "resolution_rate": (
                     round(total_resolved / total_attempted, 4) if total_attempted else 0.0
+                ),
+                "average_search_parse_ms": (
+                    round(sum(int(sample["search_parse_ms"]) for sample in measured) / len(measured), 1)
+                    if measured else None
+                ),
+                "average_results_wait_ms": (
+                    round(sum(int(sample["results_wait_ms"] or 0) for sample in measured) / len(measured), 1)
+                    if measured else None
                 ),
                 "elapsed_seconds": elapsed_seconds,
                 "stopped_reason": stopped_reason,
@@ -926,16 +1043,18 @@ class GoogleImagesBrowser:
         if not self.page:
             raise BrowserLaunchError("browser not started")
         url = self._build_url(keyword)
-        started = time.perf_counter()
         try:
-            url, _ = self._navigate_to_search(keyword)
-        except PlaywrightTimeoutError as exc:
-            raise NavigationError(f"navigation timeout: {exc}") from exc
+            url, _ = self._navigate_to_search(keyword, max_results)
+        except PlaywrightTimeoutError:
+            raise SearchParseTimeout("search navigation exceeded the configured 5-second budget") from None
         except Exception as exc:
             raise NavigationError(str(exc)) from exc
 
         self._assert_normal_page()
+        if self.last_search_metrics["navigation_ms"] > self.cfg.search_parse_timeout_ms:
+            raise SearchParseTimeout("search navigation exceeded the configured 5-second budget")
 
+        parse_started = time.perf_counter()
         collected: list[ImageItem] = []
         seen_pages: set[str] = set()
 
@@ -962,5 +1081,12 @@ class GoogleImagesBrowser:
             self.page.evaluate("pixels => window.scrollBy(0, pixels)", self.cfg.scroll_pixels)
             self.page.wait_for_timeout(self.cfg.scroll_wait_ms)
 
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return url, collected[:max_results], elapsed_ms
+        parse_ms = int((time.perf_counter() - parse_started) * 1000)
+        search_parse_ms = self.last_search_metrics["navigation_ms"] + parse_ms
+        self.last_search_metrics.update({
+            "parse_ms": parse_ms,
+            "search_parse_ms": search_parse_ms,
+        })
+        if search_parse_ms > self.cfg.search_parse_timeout_ms:
+            raise SearchParseTimeout("search and parsing exceeded the configured 5-second budget")
+        return url, collected[:max_results], search_parse_ms

@@ -29,7 +29,11 @@ persist_storage_state_updates: false
 viewport_width: 1440
 viewport_height: 1000
 navigation_timeout_ms: 45000
+# Maximum adaptive wait for Top-N anchors; the program returns early once stable.
 results_load_wait_ms: 4000
+results_poll_interval_ms: 100
+# Search navigation + domain parsing only; adaptive result wait is accounted separately.
+search_parse_timeout_ms: 5000
 
 # Loading the image grid. Fixed values only; not human-behavior randomization.
 max_scroll_rounds: 12

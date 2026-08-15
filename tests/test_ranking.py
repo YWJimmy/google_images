@@ -1,3 +1,4 @@
+from app.error_codes import describe
 from app.ranking import domain_matches, extract_external_from_href, is_google_host
 from app.structured_domains import extract_external_domains, parse_minimal_structured_domains
 from app.google_images import (
@@ -132,3 +133,6 @@ def test_minimal_structured_parser_filters_google_country_domains_and_uses_dom_f
 def test_external_domain_extraction_decodes_percent_and_unicode_escapes():
     text = r"https\u003a\u002f\u002fexample.com%2Fpage"
     assert extract_external_domains(text) == ("example.com",)
+
+def test_search_parse_timeout_has_a_stable_result_code():
+    assert describe(-10) == "SEARCH_PARSE_TIMEOUT"

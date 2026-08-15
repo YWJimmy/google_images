@@ -8,6 +8,7 @@ ERROR_CODES = {
     -7: "INVALID_INPUT",
     -8: "UNEXPECTED_INTERNAL_ERROR",
     -9: "GOOGLE_CONSENT_REQUIRED",
+    -10: "SEARCH_PARSE_TIMEOUT",
 }
 
 def describe(code: int) -> str:

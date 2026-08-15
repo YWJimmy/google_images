@@ -24,6 +24,8 @@ class Config:
     viewport_height: int
     navigation_timeout_ms: int
     results_load_wait_ms: int
+    results_poll_interval_ms: int
+    search_parse_timeout_ms: int
     max_scroll_rounds: int
     scroll_pixels: int
     scroll_wait_ms: int
@@ -64,6 +66,8 @@ def load_config(path: str | Path) -> Config:
         viewport_height=int(raw.get("viewport_height", 1000)),
         navigation_timeout_ms=int(raw.get("navigation_timeout_ms", 45000)),
         results_load_wait_ms=int(raw.get("results_load_wait_ms", 4000)),
+        results_poll_interval_ms=int(raw.get("results_poll_interval_ms", 100)),
+        search_parse_timeout_ms=int(raw.get("search_parse_timeout_ms", 5000)),
         max_scroll_rounds=int(raw.get("max_scroll_rounds", 12)),
         scroll_pixels=int(raw.get("scroll_pixels", 1800)),
         scroll_wait_ms=int(raw.get("scroll_wait_ms", 1200)),
@@ -83,6 +87,10 @@ def load_config(path: str | Path) -> Config:
         raise ValueError("session_mode must be persistent_profile or storage_state")
     if cfg.search_navigation not in {"homepage", "direct"}:
         raise ValueError("search_navigation must be homepage or direct")
+    if cfg.results_load_wait_ms <= 0 or cfg.results_poll_interval_ms <= 0:
+        raise ValueError("result wait and poll intervals must be > 0")
+    if cfg.search_parse_timeout_ms <= 0:
+        raise ValueError("search_parse_timeout_ms must be > 0")
     if not cfg.input_csv.exists():
         raise ValueError(f"input_csv not found: {cfg.input_csv}")
     return cfg
