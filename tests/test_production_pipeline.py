@@ -4,6 +4,7 @@ import pytest
 
 from app.config import _as_bool
 from app.google_images import ChallengeDetected, ConsentRequired, GoogleImagesBrowser
+from app.google_images import domain_matches as diagnostic_domain_matches
 from app.ranking_decision import decide_source_rank
 from app.state_capture import _google_only_snapshot, _is_google_url
 from app.structured_domains import SourceDomainObservation, parse_minimal_structured_domains
@@ -85,3 +86,7 @@ def test_string_false_is_not_treated_as_true():
     assert _as_bool("true", "flag") is True
     with pytest.raises(ValueError):
         _as_bool("sometimes", "flag")
+
+
+def test_source_diagnostic_has_domain_matcher_available():
+    assert diagnostic_domain_matches("en.wikipedia.org", "wikipedia.org", True)

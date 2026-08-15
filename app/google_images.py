@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 from .config import Config
 from .models import ImageItem, KeywordTask
-from .ranking import hostname, is_google_host
+from .ranking import domain_matches, hostname, is_google_host
 from .structured_domains import SourceDomainObservation, parse_minimal_structured_domains
 
 # Deliberately specific phrases only. Do NOT use generic "recaptcha" substring
@@ -586,6 +586,7 @@ class GoogleImagesBrowser:
         tasks: list[KeywordTask],
         max_results: int,
         time_budget_seconds: float,
+        start_interval_seconds: float = 0,
     ) -> tuple[dict, Path]:
         """Run a DOM-only bounded source-domain test over multiple samples."""
         if not self.page or not self.context:
@@ -595,8 +596,25 @@ class GoogleImagesBrowser:
         deadline = started + time_budget_seconds
         sample_reports: list[dict[str, object]] = []
         stopped_reason = None
+        previous_sample_started: float | None = None
 
         for sample_index, task in enumerate(tasks, start=1):
+            scheduled_start = started + (sample_index - 1) * start_interval_seconds
+            if previous_sample_started is not None:
+                scheduled_start = max(
+                    scheduled_start,
+                    previous_sample_started + start_interval_seconds,
+                )
+            while True:
+                delay = scheduled_start - time.monotonic()
+                if delay <= 0:
+                    break
+                if time.monotonic() + delay >= deadline:
+                    stopped_reason = "time_budget_exhausted"
+                    break
+                time.sleep(min(delay, 0.25))
+            if stopped_reason == "time_budget_exhausted":
+                break
             if time.monotonic() >= deadline:
                 stopped_reason = "time_budget_exhausted"
                 break
@@ -609,6 +627,11 @@ class GoogleImagesBrowser:
             sample_deadline = min(deadline, sample_started + fair_share_seconds)
             sample = {
                 "sample_index": sample_index,
+                "start_offset_ms": round((sample_started - started) * 1000),
+                "start_gap_ms": (
+                    round((sample_started - previous_sample_started) * 1000)
+                    if previous_sample_started is not None else None
+                ),
                 "target_domain": task.target_domain,
                 "candidate_count": 0,
                 "attempted_count": 0,
@@ -628,6 +651,7 @@ class GoogleImagesBrowser:
                 "search_parse_ms": None,
                 "sample_time_budget_seconds": round(fair_share_seconds, 3),
             }
+            previous_sample_started = sample_started
             try:
                 self._navigate_to_search(task.keyword, max_results)
                 self._assert_normal_page()
@@ -739,6 +763,7 @@ class GoogleImagesBrowser:
                 "sample_limit": len(tasks),
                 "max_results_per_sample": max_results,
                 "time_budget_seconds": time_budget_seconds,
+                "start_interval_seconds": start_interval_seconds,
                 "search_parse_timeout_ms": self.cfg.search_parse_timeout_ms,
                 "sequential_only": True,
                 "interaction_mode": "dom_only",
