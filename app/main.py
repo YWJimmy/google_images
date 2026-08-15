@@ -23,6 +23,8 @@ def main():
     ap.add_argument("--capture-state", action="store_true", help="capture state from a manually opened Chrome")
     ap.add_argument("--cdp-endpoint", default="http://127.0.0.1:9222")
     args = ap.parse_args()
+    if args.limit is not None and args.limit <= 0:
+        ap.error("--limit must be > 0")
     cfg = load_config(args.config)
     if args.capture_state:
         try:
@@ -110,7 +112,9 @@ def main():
         finally:
             browser.close()
         return
-    run(cfg, args.limit)
+    process_exit_code = run(cfg, args.limit)
+    if process_exit_code:
+        raise SystemExit(process_exit_code)
 
 if __name__ == "__main__":
     main()

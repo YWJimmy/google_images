@@ -47,6 +47,7 @@ git switch -c feature/short-description
 
 # 查看修改并运行测试
 git status --short
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest
 
 # 提交前逐项检查

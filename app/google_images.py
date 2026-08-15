@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 from .config import Config
 from .models import ImageItem, KeywordTask
-from .ranking import domain_matches, extract_external_from_href, hostname, is_google_host
+from .ranking import hostname, is_google_host
 from .structured_domains import SourceDomainObservation, parse_minimal_structured_domains
 
 # Deliberately specific phrases only. Do NOT use generic "recaptcha" substring
@@ -117,6 +117,7 @@ class GoogleImagesBrowser:
         self.page = None
         self.launch_args = ["--disable-notifications"]
         self._search_session_initialized = False
+        self.last_source_observations: list[SourceDomainObservation] = []
         self.last_search_metrics = {
             "navigation_ms": 0,
             "results_wait_ms": 0,
@@ -536,54 +537,48 @@ class GoogleImagesBrowser:
         return self._write_probe_report(directory, timestamp, report)
 
     def _structured_source_observations(
-        self, max_results: int
+        self, max_results: int, timeout_ms: int | None = None
     ) -> list[SourceDomainObservation]:
         """Parse source domains from the loaded page without clicking results."""
         if not self.page:
             return []
-        candidates = self.page.locator('a[href][target="_blank"]:has(img)')
-        hrefs = candidates.evaluate_all(
-            "anchors => anchors.map(anchor => anchor.href || '')"
-        )
-        hrefs = [
-            str(href) for href in hrefs
-            if (
-                (hostname(str(href)) and not is_google_host(hostname(str(href))))
-                or probe_href_kind(str(href)).startswith("google_goto_")
-            )
-        ][:max_results]
+        if timeout_ms is not None:
+            self.page.set_default_timeout(max(1, timeout_ms))
+        try:
+            candidates = self.page.locator('a[href][target="_blank"]:has(img)')
+            hrefs = [
+                str(href)
+                for href in candidates.evaluate_all(
+                    "anchors => anchors.map(anchor => anchor.href || '')"
+                )[:max_results]
+            ]
 
-        # Fast path: the current Google Images variant exposes direct external
-        # hrefs, so no full-page serialization or structured-block parsing is needed.
-        if hrefs and all(
-            hostname(href) and not is_google_host(hostname(href)) for href in hrefs
-        ):
-            return parse_minimal_structured_domains("", hrefs)
+            # Fast path: direct result-card links retain one observation per card,
+            # including repeated source URLs.
+            if hrefs and all(
+                hostname(href) and not is_google_host(hostname(href)) for href in hrefs
+            ):
+                return parse_minimal_structured_domains("", hrefs)
 
-        records = candidates.evaluate_all(
-            """anchors => anchors.map(anchor => {
-                const blocks = [];
-                let node = anchor;
-                for (let depth = 0; node && depth < 9; depth++, node = node.parentElement) {
-                    const resultCount = node.querySelectorAll('a[href*="/goto"]:has(img)').length;
-                    if (resultCount > 1) break;
-                    const html = node.outerHTML || '';
-                    if (html && html.length <= 200000) blocks.push(html);
-                }
-                return {href: anchor.href || '', blocks};
-            })"""
-        )
-        records = [
-            record for record in records
-            if (
-                (hostname(str(record.get("href", "")))
-                 and not is_google_host(hostname(str(record.get("href", "")))))
-                or probe_href_kind(str(record.get("href", ""))).startswith("google_goto_")
-            )
-        ][:max_results]
-        hrefs = [str(record.get("href", "")) for record in records]
-        blocks = [list(record.get("blocks", [])) for record in records]
-        return parse_minimal_structured_domains(self.page.content(), hrefs, blocks)
+            records = candidates.evaluate_all(
+                """anchors => anchors.map(anchor => {
+                    const blocks = [];
+                    let node = anchor;
+                    for (let depth = 0; node && depth < 9; depth++, node = node.parentElement) {
+                        const resultCount = node.querySelectorAll('a[href][target="_blank"]:has(img)').length;
+                        if (resultCount > 1) break;
+                        const html = node.outerHTML || '';
+                        if (html && html.length <= 200000) blocks.push(html);
+                    }
+                    return {href: anchor.href || '', blocks};
+                })"""
+            )[:max_results]
+            hrefs = [str(record.get("href", "")) for record in records]
+            blocks = [list(record.get("blocks", [])) for record in records]
+            return parse_minimal_structured_domains(self.page.content(), hrefs, blocks)
+        finally:
+            if timeout_ms is not None:
+                self.page.set_default_timeout(10000)
 
     def test_top_image_sources(
         self,
@@ -1045,6 +1040,8 @@ class GoogleImagesBrowser:
         url = self._build_url(keyword)
         try:
             url, _ = self._navigate_to_search(keyword, max_results)
+        except (ChallengeDetected, ConsentRequired):
+            raise
         except PlaywrightTimeoutError:
             raise SearchParseTimeout("search navigation exceeded the configured 5-second budget") from None
         except Exception as exc:
@@ -1054,32 +1051,24 @@ class GoogleImagesBrowser:
         if self.last_search_metrics["navigation_ms"] > self.cfg.search_parse_timeout_ms:
             raise SearchParseTimeout("search navigation exceeded the configured 5-second budget")
 
+        remaining_ms = self.cfg.search_parse_timeout_ms - self.last_search_metrics["navigation_ms"]
+        if remaining_ms <= 0:
+            raise SearchParseTimeout("search navigation exhausted the configured processing budget")
+
         parse_started = time.perf_counter()
-        collected: list[ImageItem] = []
-        seen_pages: set[str] = set()
-
-        for round_idx in range(self.cfg.max_scroll_rounds + 1):
-            self._assert_normal_page()
-            try:
-                hrefs = self.page.locator("a[href]").evaluate_all(
-                    "els => els.map(a => a.href).filter(Boolean)"
-                )
-            except Exception as exc:
-                raise NavigationError(f"failed to inspect result links: {exc}") from exc
-
-            for href in hrefs:
-                page_url, image_url = extract_external_from_href(href, "https://www.google.com")
-                if not page_url or page_url in seen_pages:
-                    continue
-                seen_pages.add(page_url)
-                collected.append(ImageItem(rank=len(collected) + 1, page_url=page_url, image_url=image_url))
-                if len(collected) >= max_results:
-                    break
-
-            if len(collected) >= max_results or round_idx >= self.cfg.max_scroll_rounds:
-                break
-            self.page.evaluate("pixels => window.scrollBy(0, pixels)", self.cfg.scroll_pixels)
-            self.page.wait_for_timeout(self.cfg.scroll_wait_ms)
+        try:
+            observations = self._structured_source_observations(max_results, remaining_ms)
+        except PlaywrightTimeoutError:
+            raise SearchParseTimeout("source-domain parsing exceeded the configured processing budget") from None
+        self.last_source_observations = observations
+        collected = [
+            ImageItem(
+                rank=item.rank,
+                page_url=item.source_url or f"https://{item.domains[0]}/",
+            )
+            for item in observations
+            if item.status == "resolved" and len(item.domains) == 1
+        ]
 
         parse_ms = int((time.perf_counter() - parse_started) * 1000)
         search_parse_ms = self.last_search_metrics["navigation_ms"] + parse_ms
@@ -1089,4 +1078,4 @@ class GoogleImagesBrowser:
         })
         if search_parse_ms > self.cfg.search_parse_timeout_ms:
             raise SearchParseTimeout("search and parsing exceeded the configured 5-second budget")
-        return url, collected[:max_results], search_parse_ms
+        return self.page.url, collected[:max_results], search_parse_ms

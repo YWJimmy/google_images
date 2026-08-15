@@ -3,6 +3,20 @@ from dataclasses import dataclass
 from pathlib import Path
 import yaml
 
+
+def _as_bool(value: object, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "on", "1"}:
+            return True
+        if normalized in {"false", "no", "off", "0"}:
+            return False
+    raise ValueError(f"{name} must be a boolean")
+
 @dataclass(frozen=True)
 class Config:
     daily_limit: int
@@ -29,13 +43,11 @@ class Config:
     max_scroll_rounds: int
     scroll_pixels: int
     scroll_wait_ms: int
-    require_full_depth: bool
     include_subdomains: bool
     input_csv: Path
     database_path: Path
     output_dir: Path
     log_dir: Path
-    stop_on_challenge: bool
 
     @property
     def interval_seconds(self) -> float:
@@ -53,15 +65,17 @@ def load_config(path: str | Path) -> Config:
         base_url=str(raw.get("base_url", "https://www.google.com/search")),
         images_home_url=str(raw.get("images_home_url", "https://images.google.com/ncr")),
         search_navigation=str(raw.get("search_navigation", "homepage")).strip().lower(),
-        require_google_com_host=bool(raw.get("require_google_com_host", True)),
+        require_google_com_host=_as_bool(raw.get("require_google_com_host", True), "require_google_com_host"),
         hl=str(raw.get("hl", "en")),
         gl=str(raw.get("gl", "us")),
         browser_channel=str(raw.get("browser_channel", "chrome")),
-        headless=bool(raw.get("headless", False)),
+        headless=_as_bool(raw.get("headless", False), "headless"),
         session_mode=str(raw.get("session_mode", "persistent_profile")).strip().lower(),
         profile_dir=(base / raw.get("profile_dir", "profile/google_profile")).resolve(),
         storage_state_path=(base / raw.get("storage_state_path", "private/google_state.json")).resolve(),
-        persist_storage_state_updates=bool(raw.get("persist_storage_state_updates", False)),
+        persist_storage_state_updates=_as_bool(
+            raw.get("persist_storage_state_updates", False), "persist_storage_state_updates"
+        ),
         viewport_width=int(raw.get("viewport_width", 1440)),
         viewport_height=int(raw.get("viewport_height", 1000)),
         navigation_timeout_ms=int(raw.get("navigation_timeout_ms", 45000)),
@@ -71,13 +85,11 @@ def load_config(path: str | Path) -> Config:
         max_scroll_rounds=int(raw.get("max_scroll_rounds", 12)),
         scroll_pixels=int(raw.get("scroll_pixels", 1800)),
         scroll_wait_ms=int(raw.get("scroll_wait_ms", 1200)),
-        require_full_depth=bool(raw.get("require_full_depth", True)),
-        include_subdomains=bool(raw.get("include_subdomains", True)),
+        include_subdomains=_as_bool(raw.get("include_subdomains", True), "include_subdomains"),
         input_csv=(base / raw.get("input_csv", "keywords_1000.csv")).resolve(),
         database_path=(base / raw.get("database_path", "rank_tracker.sqlite3")).resolve(),
         output_dir=(base / raw.get("output_dir", "output")).resolve(),
         log_dir=(base / raw.get("log_dir", "logs")).resolve(),
-        stop_on_challenge=bool(raw.get("stop_on_challenge", True)),
     )
     if cfg.daily_limit <= 0 or cfg.run_hours <= 0:
         raise ValueError("daily_limit and run_hours must be > 0")

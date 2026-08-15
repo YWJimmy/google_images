@@ -40,8 +40,6 @@ max_scroll_rounds: 12
 scroll_pixels: 1800
 scroll_wait_ms: 1200
 
-# If fewer than max_results are collected, return -5 instead of -1.
-require_full_depth: true
 include_subdomains: true
 
 input_csv: "keywords_1000.csv"
@@ -49,5 +47,4 @@ database_path: "rank_tracker.sqlite3"
 output_dir: "output"
 log_dir: "logs"
 
-# Safety stop: challenge / unusual-traffic detection immediately stops the run.
-stop_on_challenge: true
+# Challenge / unusual-traffic detection always stops the run; this is not configurable.

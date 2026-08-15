@@ -5,7 +5,7 @@ from html import unescape as html_unescape
 import re
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .ranking import hostname, is_google_host
+from .ranking import extract_external_from_href, hostname, is_google_host
 
 
 SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
@@ -20,6 +20,7 @@ class SourceDomainObservation:
     domains: tuple[str, ...]
     status: str
     method: str
+    source_url: str | None = None
 
 
 def _goto_token(href: str) -> str:
@@ -100,14 +101,19 @@ def _smallest_domain_block(
     return best
 
 
-def _classify(rank: int, domains: tuple[str, ...], method: str) -> SourceDomainObservation:
+def _classify(
+    rank: int,
+    domains: tuple[str, ...],
+    method: str,
+    source_url: str | None = None,
+) -> SourceDomainObservation:
     if len(domains) == 1:
         status = "resolved"
     elif domains:
         status = "ambiguous"
     else:
         status = "missing"
-    return SourceDomainObservation(rank, domains, status, method)
+    return SourceDomainObservation(rank, domains, status, method, source_url)
 
 
 def parse_minimal_structured_domains(
@@ -129,7 +135,14 @@ def parse_minimal_structured_domains(
         rank = index + 1
         direct_domain = hostname(href)
         if direct_domain and not is_google_host(direct_domain):
-            observations.append(_classify(rank, (direct_domain,), "direct_href"))
+            observations.append(_classify(rank, (direct_domain,), "direct_href", href))
+            continue
+        legacy_source, _ = extract_external_from_href(href)
+        legacy_domain = hostname(legacy_source or "")
+        if legacy_domain and not is_google_host(legacy_domain):
+            observations.append(
+                _classify(rank, (legacy_domain,), "google_redirect", legacy_source)
+            )
             continue
         token = _goto_token(href)
         script_matches: list[tuple[int, tuple[str, ...]]] = []

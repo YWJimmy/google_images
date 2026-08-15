@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
 from .google_images import CONSENT_TEXT, EXPLICIT_CHALLENGE_TEXT
+from .ranking import is_google_host
 
 
 class StateCaptureError(RuntimeError):
@@ -14,12 +16,39 @@ class StateCaptureError(RuntimeError):
 
 def _is_google_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower()
-    return (
-        host == "google.com"
-        or host.startswith("google.")
-        or ".google." in host
-        or host.endswith(".google.com")
+    return is_google_host(host)
+
+
+def _google_only_snapshot(snapshot: dict) -> dict:
+    cookies = [
+        cookie
+        for cookie in snapshot.get("cookies", [])
+        if is_google_host(str(cookie.get("domain", "")).lstrip("."))
+    ]
+    origins = [
+        origin
+        for origin in snapshot.get("origins", [])
+        if _is_google_url(str(origin.get("origin", "")))
+    ]
+    return {"cookies": cookies, "origins": origins}
+
+
+def sanitize_google_state_file(path: Path) -> dict[str, int]:
+    """Atomically remove non-Google cookies/origins without exposing values."""
+    path = path.resolve()
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    filtered = _google_only_snapshot(snapshot)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(
+        json.dumps(filtered, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    temp_path.replace(path)
+    return {
+        "cookies_before": len(snapshot.get("cookies", [])),
+        "cookies_after": len(filtered["cookies"]),
+        "origins_before": len(snapshot.get("origins", [])),
+        "origins_after": len(filtered["origins"]),
+    }
 
 
 def classify_capture_page(url: str, visible_text: str) -> str:
@@ -65,10 +94,12 @@ def capture_google_state(cdp_endpoint: str, output_path: Path) -> dict[str, int 
             if not normal_pages:
                 raise StateCaptureError("no readable normal Google page found; state was not saved")
 
-            snapshot = context.storage_state()
+            snapshot = _google_only_snapshot(context.storage_state())
             output_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
-            context.storage_state(path=str(temp_path))
+            temp_path.write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             temp_path.replace(output_path)
 
             return {
