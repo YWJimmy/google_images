@@ -476,6 +476,28 @@ python -m app.main --config config.yaml --source-domain-test --limit 10 --test-m
 
 ## 本地可视化监测页面
 
+### 创建多个专用 Chrome Profile
+
+双击：
+
+```text
+dedicated_chrome_tool_windows.bat
+```
+
+工具支持创建并打开新 Profile、重新打开已有 Profile，以及列出每个 Profile 的调试端口和在线状态。创建时输入一个仅包含字母、数字、下划线或连字符的名称；端口可直接接受工具建议值。Chrome 会以可见窗口打开，之后由用户手动访问网页。
+
+每个 Profile 保存于 `profile/dedicated/<名称>/`，本地登记信息保存于 `private/dedicated_chrome_profiles.json`，并自动加入 `private/dashboard_chromes.json`。这些路径均已被 `.gitignore` 排除。工具不会复制日常 Chrome Profile，不读取或导出 Cookie、History，也不会自动处理人机验证。如果监控页面已在运行，创建新 Profile 后需重启监控服务，或在页面中手动添加对应 CDP 地址。
+
+也可使用命令行：
+
+```powershell
+python -m app.chrome_profile_tool create --name manual_02 --port 9224 --url https://images.google.com/ncr
+python -m app.chrome_profile_tool start --name manual_02
+python -m app.chrome_profile_tool list
+```
+
+调试端口仅绑定 `127.0.0.1`，用于监控页面或程序连接该专用窗口。使用期间不要运行来源不明的本机程序，也不要把端口转发到局域网或公网。
+
 保持一个或多个使用独立 profile 和调试端口启动的 Chrome 窗口打开，然后双击：
 
 ```text
