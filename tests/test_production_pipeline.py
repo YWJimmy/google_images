@@ -6,6 +6,12 @@ import pytest
 
 from app.config import _as_bool
 from app import main as main_module
+from app.dashboard import (
+    HUMAN_POLL_SECONDS,
+    classify_cdp_page_urls,
+    validate_history_url,
+    validate_local_cdp_endpoint,
+)
 from app.google_images import (
     ChallengeDetected,
     ConsentRequired,
@@ -176,3 +182,31 @@ def test_post_search_delay_starts_six_seconds_after_completion():
 
 def test_post_search_delay_does_not_start_past_total_budget():
     assert not wait_for_post_search_delay(5.0, 6.0, 10.0, lambda: 5.0, lambda _seconds: None)
+
+
+def test_dashboard_only_accepts_local_cdp_endpoints():
+    assert validate_local_cdp_endpoint("http://127.0.0.1:9222/") == "http://127.0.0.1:9222"
+    assert validate_local_cdp_endpoint("http://localhost:9223") == "http://localhost:9223"
+    with pytest.raises(ValueError):
+        validate_local_cdp_endpoint("http://example.com:9222")
+    with pytest.raises(ValueError):
+        validate_local_cdp_endpoint("https://127.0.0.1:9222")
+
+
+def test_manual_history_navigation_only_accepts_http_urls():
+    assert validate_history_url("https://images.google.com/ncr") == "https://images.google.com/ncr"
+    with pytest.raises(ValueError):
+        validate_history_url("javascript:alert(1)")
+    with pytest.raises(ValueError):
+        validate_history_url("file:///private/state.json")
+
+
+def test_dashboard_checks_manual_verification_every_ten_seconds():
+    assert HUMAN_POLL_SECONDS == 10.0
+
+
+def test_dashboard_classifies_cdp_tabs_without_query_details():
+    assert classify_cdp_page_urls(["https://images.google.com/search?q=private"]) == "normal"
+    assert classify_cdp_page_urls(["https://www.google.com/sorry/index?q=token"]) == "challenge"
+    assert classify_cdp_page_urls(["https://consent.google.com/m"]) == "consent"
+    assert classify_cdp_page_urls(["http://127.0.0.1:8765/"]) == "other"

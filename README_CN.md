@@ -474,6 +474,30 @@ python -m app.main --config config.yaml --source-domain-test --limit 10 --test-m
 
 来源测试默认在每次搜索完全结束后固定等待 `6` 秒，再启动下一次搜索；成功、失败和 5 秒超时跳过都遵循该规则。可用 `--test-post-search-delay-seconds` 显式覆盖，报告中的 `previous_finish_to_start_ms` 可用于核验。
 
+## 本地可视化监测页面
+
+保持一个或多个使用独立 profile 和调试端口启动的 Chrome 窗口打开，然后双击：
+
+```text
+start_dashboard_windows.bat
+```
+
+也可以运行：
+
+```powershell
+python -m app.dashboard --config config.yaml --open-browser
+```
+
+页面仅监听 `http://127.0.0.1:8765/`，提供以下功能：
+
+- 自定义登记多个本机 CDP 地址，例如 `http://127.0.0.1:9222`、`http://127.0.0.1:9223`；
+- 每个 Chrome 窗口独立显示在线、当前页面、任务进度和关键词状态，并可同时运行；
+- challenge 或 consent 出现后暂停当前关键词，每 10 秒检查一次可见页面；人工处理完成后自动重试同一关键词；
+- 每次关键词结束（包括 5 秒超时）后固定等待 6 秒再继续；
+- 用户可输入一个完整 `http(s)` URL，在选定窗口中正常打开，由 Chrome 自身写入 History。
+
+窗口列表保存在被忽略的 `private/dashboard_chromes.json`。仪表盘和 CDP 端点都只允许本机回环地址；页面不显示 Cookie、challenge token 或完整搜索结果 URL。不要同时让两个任务控制同一个 CDP 端点。
+
 测试按样例顺序串行加载页面，但不会点击图片。图片锚点直接提供外部 `href` 时优先读取其规范化域名；页面只提供 Google `goto` 令牌时，再从页面 HTML、内嵌脚本和单结果 DOM 祖先中寻找包含该令牌的最小结构块。仅当结构块中存在唯一外部域名时才标记为已解析。总预算会按剩余样例动态分配。报告保存到 `logs/diagnostics/source_domain_test_*.json`，不记录搜索词、完整 URL 或 `goto` 令牌。存在缺失、多域名歧义或匹配项之前仍有未解析位置时，只标记为不完整，不会误报精确排名或目标不存在。
 
 ### 隐私边界

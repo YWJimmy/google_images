@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Images 专用 Chrome 监测</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07111f; --panel:#0f1d30; --line:#243850; --text:#e7eef8; --muted:#93a6bd; --ok:#36d399; --warn:#fbbd23; --bad:#f87272; --accent:#6ea8fe; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:radial-gradient(circle at top left,#132b48 0,#07111f 42%); color:var(--text); font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif; min-height:100vh; }
+    main { max-width:1180px; margin:auto; padding:28px 20px 48px; }
+    header { display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-bottom:20px; }
+    h1 { margin:0; font-size:24px; letter-spacing:.02em; }
+    .subtitle { color:var(--muted); margin-top:5px; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+    .card,.panel { background:rgba(15,29,48,.94); border:1px solid var(--line); border-radius:14px; box-shadow:0 12px 35px rgba(0,0,0,.18); }
+    .card { padding:16px; }
+    .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+    .value { margin-top:7px; font-size:21px; font-weight:700; }
+    .panel { margin-top:14px; padding:18px; }
+    .toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; }
+    label { color:var(--muted); font-size:12px; display:grid; gap:5px; }
+    input,select { width:100px; border:1px solid var(--line); border-radius:8px; padding:9px 10px; background:#091626; color:var(--text); }
+    select { width:260px; }
+    button { border:0; border-radius:9px; padding:10px 16px; color:#06101d; background:var(--accent); font-weight:700; cursor:pointer; }
+    button.stop { background:var(--bad); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .badge { display:inline-flex; align-items:center; gap:7px; border-radius:999px; padding:5px 10px; background:#17283d; font-size:12px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+    .ok .dot { background:var(--ok); box-shadow:0 0 12px var(--ok); }
+    .warn .dot { background:var(--warn); box-shadow:0 0 12px var(--warn); }
+    .bad .dot { background:var(--bad); box-shadow:0 0 12px var(--bad); }
+    .progress { height:9px; background:#091626; border-radius:999px; overflow:hidden; margin-top:14px; }
+    .progress > div { height:100%; width:0; background:linear-gradient(90deg,#4388ff,#36d399); transition:width .25s ease; }
+    .notice { display:none; margin-top:14px; padding:14px; border:1px solid #775f18; background:#332b12; border-radius:10px; color:#ffe9a6; }
+    .notice.show { display:block; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th,td { padding:10px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-size:12px; position:sticky; top:0; background:var(--panel); }
+    tbody tr.current { background:#142a46; }
+    .table-wrap { max-height:460px; overflow:auto; }
+    .muted { color:var(--muted); }
+    @media (max-width:800px) { .grid { grid-template-columns:repeat(2,1fr); } header { align-items:flex-start; flex-direction:column; } }
+  </style>
+</head>
+<body><main>
+  <header>
+    <div><h1>专用 Chrome 搜索监测</h1><div class="subtitle">本地页面 · 多窗口 CDP · 人工验证后自动恢复</div></div>
+    <div id="chromeBadge" class="badge"><span class="dot"></span><span>检查中</span></div>
+  </header>
+  <section class="grid">
+    <div class="card"><div class="label">运行状态</div><div class="value" id="runState">空闲</div></div>
+    <div class="card"><div class="label">进度</div><div class="value" id="progressText">0 / 0</div></div>
+    <div class="card"><div class="label">页面状态</div><div class="value" id="pageState">未知</div></div>
+    <div class="card"><div class="label">下次人工状态检查</div><div class="value" id="nextPoll">—</div></div>
+  </section>
+  <section class="panel">
+    <div class="label">Chrome 窗口管理</div>
+    <div class="toolbar" style="margin-top:10px">
+      <label>当前窗口<select id="chromeSelect"></select></label>
+      <label>名称<input id="chromeLabel" value="专用 Chrome 9223" style="width:180px"></label>
+      <label>CDP 地址<input id="chromeEndpoint" value="http://127.0.0.1:9223" style="width:220px"></label>
+      <button id="addChrome">增加监听</button>
+    </div>
+    <div class="toolbar" style="margin-top:14px">
+      <label style="flex:1">手动打开网址并由 Chrome 记录 History<input id="historyUrl" placeholder="https://images.google.com/ncr" style="width:100%"></label>
+      <button id="addHistory">在选定窗口打开</button>
+      <span class="muted" id="actionMessage"></span>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="toolbar">
+      <label>样本数<input id="limit" type="number" min="1" max="1000" value="50"></label>
+      <label>Top N<input id="maxResults" type="number" min="1" max="100" value="100"></label>
+      <label>搜索后等待（秒）<input id="delay" type="number" min="0" step="0.5" value="6"></label>
+      <button id="start">开始任务</button><button id="stop" class="stop" disabled>停止</button>
+      <span class="muted" id="updated"></span>
+    </div>
+    <div class="progress"><div id="progressBar"></div></div>
+    <div id="notice" class="notice">检测到人工验证或 consent。程序已暂停，不会继续导航；请在专用 Chrome 中处理，系统每 10 秒检查一次。</div>
+  </section>
+  <section class="panel"><div class="label">关键词状态</div><div class="table-wrap"><table>
+    <thead><tr><th>#</th><th>关键词</th><th>目标域名</th><th>状态</th><th>排名</th><th>解析数量</th><th>耗时</th><th>说明</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div></section>
+</main><script>
+const $=id=>document.getElementById(id); let state={},selectedId='';
+const esc=v=>String(v??'');
+function render(s){ state=s; const online=s.chrome_online; $('chromeBadge').className='badge '+(online?'ok':'bad'); $('chromeBadge').lastChild.textContent=online?'Chrome 9222 在线':'Chrome 9222 离线';
+  selectedId=s.selected_id; const select=$('chromeSelect'); const signature=s.chromes.map(c=>c.id+':'+c.label+':'+c.chrome_online).join('|');
+  if(select.dataset.signature!==signature){select.replaceChildren();for(const chrome of s.chromes){const option=document.createElement('option');option.value=chrome.id;option.textContent=`${chrome.label} · ${chrome.endpoint} · ${chrome.chrome_online?'在线':'离线'}${chrome.active?' · 运行中':''}`;select.appendChild(option)}select.dataset.signature=signature} select.value=selectedId;
+  $('chromeBadge').lastChild.textContent=online?`${s.label} 在线`:`${s.label} 离线`;
+  $('runState').textContent=s.run_state_label; $('progressText').textContent=`${s.completed_count} / ${s.total_count}`; $('pageState').textContent=s.page_state||'未知';
+  $('nextPoll').textContent=s.next_human_poll_seconds==null?'—':`${s.next_human_poll_seconds}s`; $('progressBar').style.width=(s.total_count?100*s.completed_count/s.total_count:0)+'%';
+  $('notice').classList.toggle('show',s.run_state==='waiting_for_human'); $('start').disabled=s.active; $('stop').disabled=!s.active; $('updated').textContent='更新 '+new Date().toLocaleTimeString();
+  const body=$('rows'); body.replaceChildren(); for(const item of s.tasks){ const tr=document.createElement('tr'); if(item.index===s.current_index)tr.className='current';
+    [item.index,item.keyword,item.target_domain,item.status_label,item.rank??'—',item.resolved_count??'—',item.elapsed_ms==null?'—':item.elapsed_ms+'ms',item.message||''].forEach(v=>{const td=document.createElement('td');td.textContent=esc(v);tr.appendChild(td)}); body.appendChild(tr); }
+}
+async function refresh(){try{const query=selectedId?'?chrome_id='+encodeURIComponent(selectedId):'';render(await (await fetch('/api/status'+query,{cache:'no-store'})).json())}catch(e){$('runState').textContent='页面服务断开'}}
+async function action(path,data={},includeChrome=true){if(includeChrome)data.chrome_id=selectedId;const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const result=await response.json();if(!response.ok){$('actionMessage').textContent=result.error||'操作失败';return null}$('actionMessage').textContent='操作成功';await refresh();return result}
+$('chromeSelect').onchange=()=>{selectedId=$('chromeSelect').value;refresh()};
+$('addChrome').onclick=async()=>{const result=await action('/api/chromes',{label:$('chromeLabel').value,endpoint:$('chromeEndpoint').value},false);if(result){selectedId=result.chrome_id;await refresh()}};
+$('addHistory').onclick=()=>action('/api/history',{url:$('historyUrl').value});
+$('start').onclick=()=>action('/api/start',{limit:+$('limit').value,max_results:+$('maxResults').value,post_search_delay_seconds:+$('delay').value}); $('stop').onclick=()=>action('/api/stop');
+refresh(); setInterval(refresh,2000);
+</script></body></html>

@@ -1099,6 +1099,10 @@ class GoogleImagesBrowser:
         if state == "consent":
             raise ConsentRequired(reason or "Google consent required")
 
+    def page_state(self) -> tuple[str, str | None]:
+        """Return the visible Google page state without navigating or exposing content."""
+        return self._page_state()
+
     def search(self, keyword: str, max_results: int) -> tuple[str, list[ImageItem], int]:
         if not self.page:
             raise BrowserLaunchError("browser not started")
