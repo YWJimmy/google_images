@@ -35,6 +35,8 @@ from .google_images import (
     GoogleImagesBrowser,
     NavigationError,
     SearchParseTimeout,
+    TIMEOUT_STAGE_LABELS,
+    format_search_metrics,
 )
 from .ranking_decision import decide_source_rank
 from .ranking import is_google_host
@@ -60,7 +62,7 @@ TASK_LABELS = {
     "found": "已命中",
     "not_found": "Top-N 未命中",
     "incomplete": "结果不完整",
-    "timeout": "5秒超时跳过",
+    "timeout": "阶段超时跳过",
     "navigation_error": "导航错误",
     "error": "内部错误",
     "stopped": "已停止",
@@ -205,6 +207,9 @@ class ChromeSlot:
                     "resolved_count": None,
                     "elapsed_ms": None,
                     "message": "",
+                    "timing": "",
+                    "timeout_stage": None,
+                    "retry_action": None,
                     "attempts": 0,
                 }
                 for index, task in enumerate(source_tasks, start=1)
@@ -334,6 +339,8 @@ class ChromeSlot:
                             resolved_count=len(items),
                             elapsed_ms=elapsed_ms,
                             message=decision.message or "",
+                            timing=format_search_metrics(browser.last_search_metrics),
+                            retry_action=browser.last_search_metrics.get("recovery", "none"),
                         )
                         with self.lock:
                             self.page_state = "normal"
@@ -368,11 +375,16 @@ class ChromeSlot:
                             self.message = "人工处理完成，正在重试当前关键词"
                         continue
                     except SearchParseTimeout as exc:
+                        stage_label = TIMEOUT_STAGE_LABELS.get(exc.stage, exc.stage)
+                        timing = format_search_metrics(exc.metrics)
                         self._set_task(
                             index,
                             status="timeout",
                             elapsed_ms=int((time.perf_counter() - started) * 1000),
-                            message=str(exc),
+                            message=f"{stage_label}：{exc}",
+                            timing=timing,
+                            timeout_stage=exc.stage,
+                            retry_action=exc.recovery,
                         )
                         break
                     except NavigationError as exc:

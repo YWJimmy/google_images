@@ -17,6 +17,9 @@ from app.google_images import (
     ChallengeDetected,
     ConsentRequired,
     GoogleImagesBrowser,
+    PlaywrightTimeoutError,
+    SearchParseTimeout,
+    format_search_metrics,
     wait_for_post_search_delay,
 )
 from app.google_images import domain_matches as diagnostic_domain_matches
@@ -76,6 +79,62 @@ def test_search_preserves_safety_exceptions(error):
     browser._navigate_to_search = fail
     with pytest.raises(type(error)):
         browser.search("example", 100)
+
+
+def test_search_timeout_preserves_stage_and_timing_details():
+    browser = GoogleImagesBrowser.__new__(GoogleImagesBrowser)
+    browser.page = object()
+    browser.cfg = SimpleNamespace(
+        base_url="https://www.google.com/search", hl="en", gl="us"
+    )
+    browser.last_search_metrics = {"search_box_wait_ms": 1200, "retry_count": 0}
+    browser._navigate_to_search = lambda *_args: (_ for _ in ()).throw(
+        SearchParseTimeout(
+            "等待搜索框超时",
+            stage="search_box_wait",
+            metrics=browser.last_search_metrics,
+        )
+    )
+
+    with pytest.raises(SearchParseTimeout) as caught:
+        browser.search("example", 100)
+
+    assert caught.value.stage == "search_box_wait"
+    assert caught.value.metrics["search_box_wait_ms"] == 1200
+    assert format_search_metrics(caught.value.metrics) == "搜索框1200ms"
+
+
+def test_homepage_timeout_falls_back_to_direct_url_within_same_budget():
+    class Page:
+        def __init__(self):
+            self.urls = []
+            self.url = "https://images.google.com/"
+
+        def goto(self, url, **_kwargs):
+            self.urls.append(url)
+            if len(self.urls) == 1:
+                raise PlaywrightTimeoutError("home slow")
+
+    cfg = SimpleNamespace(
+        base_url="https://www.google.com/search",
+        hl="en",
+        gl="us",
+        max_results=100,
+        navigation_timeout_ms=45000,
+        search_parse_timeout_ms=5000,
+        search_navigation="homepage",
+        images_home_url="https://images.google.com/ncr",
+        require_google_com_host=True,
+    )
+    browser = GoogleImagesBrowser(cfg)
+    browser.page = Page()
+    browser._wait_for_result_candidates = lambda _expected: (0, 0)
+
+    browser._navigate_to_search("example", 100)
+
+    assert len(browser.page.urls) == 2
+    assert browser.last_search_metrics["retry_count"] == 1
+    assert browser.last_search_metrics["recovery"] == "fallback_direct_url"
 
 
 def test_state_capture_rejects_google_lookalikes_and_filters_other_sites():

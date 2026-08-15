@@ -107,7 +107,52 @@ class NavigationError(RuntimeError):
     pass
 
 class SearchParseTimeout(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str = "unknown",
+        metrics: dict[str, int | str] | None = None,
+        recovery: str = "skipped",
+    ):
+        super().__init__(message)
+        self.stage = stage
+        self.metrics = dict(metrics or {})
+        self.recovery = recovery
+
+
+TIMEOUT_STAGE_LABELS = {
+    "home_navigation": "进入图片首页",
+    "search_box_wait": "等待搜索框",
+    "keyword_input": "输入关键词",
+    "submit_navigation": "提交并开始搜索",
+    "direct_navigation": "直接搜索导航",
+    "direct_retry_navigation": "直接地址回退重试",
+    "results_loading": "等待结果加载",
+    "source_parsing": "解析来源域名",
+    "total_budget": "搜索与解析总预算",
+    "unknown": "未知阶段",
+}
+
+
+def format_search_metrics(metrics: dict) -> str:
+    parts = []
+    fields = (
+        ("home_navigation_ms", "首页"),
+        ("search_box_wait_ms", "搜索框"),
+        ("keyword_input_ms", "输入"),
+        ("submit_navigation_ms", "提交"),
+        ("results_wait_ms", "结果加载"),
+        ("parse_ms", "解析"),
+    )
+    for key, label in fields:
+        value = metrics.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            parts.append(f"{label}{int(value)}ms")
+    retry_count = int(metrics.get("retry_count", 0) or 0)
+    if retry_count:
+        parts.append(f"回退重试{retry_count}次")
+    return " · ".join(parts)
 
 
 def wait_for_post_search_delay(
@@ -143,10 +188,17 @@ class GoogleImagesBrowser:
         self._search_session_initialized = False
         self.last_source_observations: list[SourceDomainObservation] = []
         self.last_search_metrics = {
+            "home_navigation_ms": 0,
+            "search_box_wait_ms": 0,
+            "keyword_input_ms": 0,
+            "submit_navigation_ms": 0,
             "navigation_ms": 0,
             "results_wait_ms": 0,
+            "result_candidate_count": 0,
             "parse_ms": 0,
             "search_parse_ms": 0,
+            "retry_count": 0,
+            "recovery": "none",
         }
 
     def start(self):
@@ -241,7 +293,7 @@ class GoogleImagesBrowser:
         params = {"q": keyword, "udm": "2", "hl": self.cfg.hl, "gl": self.cfg.gl}
         return self.cfg.base_url + "?" + urlencode(params)
 
-    def _wait_for_result_candidates(self, expected_results: int) -> int:
+    def _wait_for_result_candidates(self, expected_results: int) -> tuple[int, int]:
         """Wait adaptively until the Top-N candidate count is stable."""
         started = time.perf_counter()
         deadline = started + self.cfg.results_load_wait_ms / 1000
@@ -261,7 +313,7 @@ class GoogleImagesBrowser:
                 stable_rounds = 0
             previous = count
             self.page.wait_for_timeout(self.cfg.results_poll_interval_ms)
-        return int((time.perf_counter() - started) * 1000)
+        return int((time.perf_counter() - started) * 1000), max(0, previous)
 
     def _navigate_to_search(
         self, keyword: str, expected_results: int | None = None
@@ -269,51 +321,131 @@ class GoogleImagesBrowser:
         """Navigate through the configured entry point and return target/landing URLs."""
         target_url = self._build_url(keyword)
         expected_results = expected_results or self.cfg.max_results
-        navigation_timeout = min(
-            self.cfg.navigation_timeout_ms, self.cfg.search_parse_timeout_ms
-        )
-        if self.cfg.search_navigation == "direct" or self._search_session_initialized:
-            navigation_started = time.perf_counter()
-            self.page.goto(
-                target_url, wait_until="domcontentloaded", timeout=navigation_timeout
+        navigation_started = time.perf_counter()
+        navigation_deadline = navigation_started + self.cfg.search_parse_timeout_ms / 1000
+        self.last_search_metrics = {
+            "home_navigation_ms": 0,
+            "search_box_wait_ms": 0,
+            "keyword_input_ms": 0,
+            "submit_navigation_ms": 0,
+            "navigation_ms": 0,
+            "results_wait_ms": 0,
+            "result_candidate_count": 0,
+            "parse_ms": 0,
+            "search_parse_ms": 0,
+            "retry_count": 0,
+            "recovery": "none",
+        }
+
+        def remaining_ms(cap: int | None = None) -> int:
+            remaining = max(1, int((navigation_deadline - time.perf_counter()) * 1000))
+            return min(remaining, cap) if cap is not None else remaining
+
+        def update_total() -> None:
+            elapsed = int((time.perf_counter() - navigation_started) * 1000)
+            self.last_search_metrics["navigation_ms"] = elapsed
+            self.last_search_metrics["search_parse_ms"] = elapsed
+
+        def timeout(stage: str, recovery: str = "skipped") -> SearchParseTimeout:
+            update_total()
+            label = TIMEOUT_STAGE_LABELS.get(stage, stage)
+            return SearchParseTimeout(
+                f"{label}未在总计 {self.cfg.search_parse_timeout_ms}ms 的搜索处理预算内完成",
+                stage=stage,
+                metrics=self.last_search_metrics,
+                recovery=recovery,
             )
-            navigation_ms = int((time.perf_counter() - navigation_started) * 1000)
-            wait_ms = self._wait_for_result_candidates(expected_results)
-            self.last_search_metrics.update({
-                "navigation_ms": navigation_ms,
-                "results_wait_ms": wait_ms,
-                "parse_ms": 0,
-                "search_parse_ms": navigation_ms,
-            })
+
+        def direct_navigation(stage: str) -> None:
+            step_started = time.perf_counter()
+            try:
+                self.page.goto(
+                    target_url,
+                    wait_until="domcontentloaded",
+                    timeout=min(self.cfg.navigation_timeout_ms, remaining_ms()),
+                )
+            except PlaywrightTimeoutError:
+                self.last_search_metrics["submit_navigation_ms"] += int(
+                    (time.perf_counter() - step_started) * 1000
+                )
+                recovery = "fallback_direct_url_failed" if stage == "direct_retry_navigation" else "skipped"
+                raise timeout(stage, recovery) from None
+            self.last_search_metrics["submit_navigation_ms"] += int(
+                (time.perf_counter() - step_started) * 1000
+            )
+
+        if self.cfg.search_navigation == "direct" or self._search_session_initialized:
+            direct_navigation("direct_navigation")
+            update_total()
+            wait_ms, candidate_count = self._wait_for_result_candidates(expected_results)
+            self.last_search_metrics.update(
+                {"results_wait_ms": wait_ms, "result_candidate_count": candidate_count}
+            )
             return target_url, None
 
-        self.page.goto(
-            self.cfg.images_home_url,
-            wait_until="domcontentloaded",
-            timeout=self.cfg.navigation_timeout_ms,
-        )
-        landing_url = self.page.url
-        self._assert_normal_page()
-        if self.cfg.require_google_com_host and not is_expected_google_com_host(landing_url):
-            raise NavigationError(
-                f"Images home redirected outside google.com: {redact_diagnostic_url(landing_url)}"
+        landing_url = None
+        current_stage = "home_navigation"
+        step_started = time.perf_counter()
+        try:
+            self.page.goto(
+                self.cfg.images_home_url,
+                wait_until="domcontentloaded",
+                timeout=min(self.cfg.navigation_timeout_ms, remaining_ms(2000)),
+            )
+            self.last_search_metrics["home_navigation_ms"] = int(
+                (time.perf_counter() - step_started) * 1000
+            )
+            landing_url = self.page.url
+            self._assert_normal_page()
+            if self.cfg.require_google_com_host and not is_expected_google_com_host(landing_url):
+                raise NavigationError(
+                    f"Images home redirected outside google.com: {redact_diagnostic_url(landing_url)}"
+                )
+
+            current_stage = "search_box_wait"
+            step_started = time.perf_counter()
+            search_box = self.page.locator('textarea[name="q"], input[name="q"]').first
+            search_box.wait_for(state="visible", timeout=remaining_ms(1200))
+            self.last_search_metrics["search_box_wait_ms"] = int(
+                (time.perf_counter() - step_started) * 1000
             )
 
-        search_box = self.page.locator('textarea[name="q"], input[name="q"]').first
-        search_box.wait_for(state="visible", timeout=10000)
-        navigation_started = time.perf_counter()
-        search_box.fill(keyword)
-        search_box.press("Enter")
-        self.page.wait_for_load_state("domcontentloaded", timeout=navigation_timeout)
-        navigation_ms = int((time.perf_counter() - navigation_started) * 1000)
+            current_stage = "keyword_input"
+            step_started = time.perf_counter()
+            search_box.fill(keyword, timeout=remaining_ms(1000))
+            search_box.press("Enter", timeout=remaining_ms(1000))
+            self.last_search_metrics["keyword_input_ms"] = int(
+                (time.perf_counter() - step_started) * 1000
+            )
+
+            current_stage = "submit_navigation"
+            step_started = time.perf_counter()
+            self.page.wait_for_load_state("domcontentloaded", timeout=remaining_ms())
+            self.last_search_metrics["submit_navigation_ms"] = int(
+                (time.perf_counter() - step_started) * 1000
+            )
+        except PlaywrightTimeoutError:
+            elapsed = int((time.perf_counter() - step_started) * 1000)
+            field = {
+                "home_navigation": "home_navigation_ms",
+                "search_box_wait": "search_box_wait_ms",
+                "keyword_input": "keyword_input_ms",
+                "submit_navigation": "submit_navigation_ms",
+            }[current_stage]
+            self.last_search_metrics[field] = elapsed
+            if remaining_ms() >= 500:
+                self.last_search_metrics["retry_count"] = 1
+                self.last_search_metrics["recovery"] = "fallback_direct_url"
+                direct_navigation("direct_retry_navigation")
+            else:
+                raise timeout(current_stage) from None
+
         self._search_session_initialized = True
-        wait_ms = self._wait_for_result_candidates(expected_results)
-        self.last_search_metrics.update({
-            "navigation_ms": navigation_ms,
-            "results_wait_ms": wait_ms,
-            "parse_ms": 0,
-            "search_parse_ms": navigation_ms,
-        })
+        update_total()
+        wait_ms, candidate_count = self._wait_for_result_candidates(expected_results)
+        self.last_search_metrics.update(
+            {"results_wait_ms": wait_ms, "result_candidate_count": candidate_count}
+        )
         return target_url, landing_url
 
     def result_dom_summary(self) -> dict[str, object]:
@@ -701,9 +833,17 @@ class GoogleImagesBrowser:
                 "resolution_methods": {},
                 "elapsed_ms": None,
                 "navigation_ms": None,
+                "home_navigation_ms": None,
+                "search_box_wait_ms": None,
+                "keyword_input_ms": None,
+                "submit_navigation_ms": None,
                 "results_wait_ms": None,
+                "result_candidate_count": None,
                 "parse_ms": None,
                 "search_parse_ms": None,
+                "retry_count": 0,
+                "recovery": "none",
+                "timeout_stage": None,
                 "sample_time_budget_seconds": round(fair_share_seconds, 3),
             }
             previous_sample_started = sample_started
@@ -716,7 +856,17 @@ class GoogleImagesBrowser:
                 self._navigate_to_search(task.keyword, max_results)
                 self._assert_normal_page()
                 sample["navigation_ms"] = self.last_search_metrics["navigation_ms"]
-                sample["results_wait_ms"] = self.last_search_metrics["results_wait_ms"]
+                for metric_name in (
+                    "home_navigation_ms",
+                    "search_box_wait_ms",
+                    "keyword_input_ms",
+                    "submit_navigation_ms",
+                    "results_wait_ms",
+                    "result_candidate_count",
+                    "retry_count",
+                    "recovery",
+                ):
+                    sample[metric_name] = self.last_search_metrics[metric_name]
                 if self.last_search_metrics["navigation_ms"] > self.cfg.search_parse_timeout_ms:
                     sample["status"] = "search_parse_timeout"
                     continue
@@ -810,9 +960,17 @@ class GoogleImagesBrowser:
                         )
                     except Exception as exc:
                         telemetry_error = type(exc).__name__
+            except SearchParseTimeout as exc:
+                for metric_name, value in exc.metrics.items():
+                    if metric_name in sample:
+                        sample[metric_name] = value
+                sample["timeout_stage"] = exc.stage
+                sample["recovery"] = exc.recovery
+                sample["status"] = "search_parse_timeout"
             except PlaywrightTimeoutError:
                 sample["navigation_ms"] = self.cfg.search_parse_timeout_ms
                 sample["search_parse_ms"] = self.cfg.search_parse_timeout_ms
+                sample["timeout_stage"] = "unknown"
                 sample["status"] = "search_parse_timeout"
             except Exception as exc:
                 sample["status"] = "error"
@@ -1214,24 +1372,49 @@ class GoogleImagesBrowser:
             url, _ = self._navigate_to_search(keyword, max_results)
         except (ChallengeDetected, ConsentRequired):
             raise
+        except SearchParseTimeout:
+            raise
         except PlaywrightTimeoutError:
-            raise SearchParseTimeout("search navigation exceeded the configured 5-second budget") from None
+            raise SearchParseTimeout(
+                "搜索导航超出处理预算",
+                stage="direct_navigation",
+                metrics=self.last_search_metrics,
+            ) from None
         except Exception as exc:
             raise NavigationError(str(exc)) from exc
 
         self._assert_normal_page()
         if self.last_search_metrics["navigation_ms"] > self.cfg.search_parse_timeout_ms:
-            raise SearchParseTimeout("search navigation exceeded the configured 5-second budget")
+            raise SearchParseTimeout(
+                "搜索导航超出处理预算",
+                stage="submit_navigation",
+                metrics=self.last_search_metrics,
+            )
 
         remaining_ms = self.cfg.search_parse_timeout_ms - self.last_search_metrics["navigation_ms"]
         if remaining_ms <= 0:
-            raise SearchParseTimeout("search navigation exhausted the configured processing budget")
+            raise SearchParseTimeout(
+                "搜索导航已用完搜索与解析预算",
+                stage="total_budget",
+                metrics=self.last_search_metrics,
+            )
 
         parse_started = time.perf_counter()
         try:
             observations = self._structured_source_observations(max_results, remaining_ms)
         except PlaywrightTimeoutError:
-            raise SearchParseTimeout("source-domain parsing exceeded the configured processing budget") from None
+            parse_ms = int((time.perf_counter() - parse_started) * 1000)
+            self.last_search_metrics.update(
+                {
+                    "parse_ms": parse_ms,
+                    "search_parse_ms": self.last_search_metrics["navigation_ms"] + parse_ms,
+                }
+            )
+            raise SearchParseTimeout(
+                "来源域名解析超出剩余处理预算",
+                stage="source_parsing",
+                metrics=self.last_search_metrics,
+            ) from None
         self.last_source_observations = observations
         collected = [
             ImageItem(
@@ -1249,5 +1432,9 @@ class GoogleImagesBrowser:
             "search_parse_ms": search_parse_ms,
         })
         if search_parse_ms > self.cfg.search_parse_timeout_ms:
-            raise SearchParseTimeout("search and parsing exceeded the configured 5-second budget")
+            raise SearchParseTimeout(
+                "搜索与解析超出总处理预算",
+                stage="total_budget",
+                metrics=self.last_search_metrics,
+            )
         return self.page.url, collected[:max_results], search_parse_ms

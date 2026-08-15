@@ -12,6 +12,7 @@ from .google_images import (
     BrowserLaunchError,
     NavigationError,
     SearchParseTimeout,
+    format_search_metrics,
 )
 from .models import SearchResult
 from .ranking_decision import decide_source_rank
@@ -96,6 +97,12 @@ def run(cfg: Config, limit_override: int | None = None) -> int:
                     google_url=google_url,
                     elapsed_ms=elapsed,
                     message=decision.message,
+                )
+                logger.info(
+                    "[%d/%d] stages=%s",
+                    idx + 1,
+                    len(pending),
+                    format_search_metrics(browser.last_search_metrics) or "no measurable delay",
                 )
 
             except ChallengeDetected as exc:
