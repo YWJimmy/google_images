@@ -247,6 +247,48 @@ def test_refresh_page_binding_keeps_live_target():
     assert browser.page is page
 
 
+def test_refresh_page_binding_prefers_new_normal_target_after_challenge():
+    class Page:
+        def __init__(self, url):
+            self.url = url
+            self.navigation_timeout = None
+            self.timeout = None
+
+        def is_closed(self):
+            return False
+
+        def set_default_navigation_timeout(self, value):
+            self.navigation_timeout = value
+
+        def set_default_timeout(self, value):
+            self.timeout = value
+
+    stale_challenge = Page("https://www.google.com/sorry/index")
+    solved_target = Page("https://www.google.com/search?q=done")
+    browser = GoogleImagesBrowser(SimpleNamespace(navigation_timeout_ms=30000))
+    browser.context = SimpleNamespace(pages=[stale_challenge, solved_target])
+    browser.page = stale_challenge
+
+    assert browser.refresh_page_binding(prefer_normal_google_page=True)
+    assert browser.page is solved_target
+
+
+def test_dashboard_resume_start_marks_prior_samples_without_rerunning(monkeypatch):
+    tasks = [SimpleNamespace(keyword=f"k{i}", target_domain="example.com") for i in range(1, 4)]
+    monkeypatch.setattr("app.dashboard.load_tasks", lambda _path, _limit: tasks)
+    dashboard = __import__("app.dashboard", fromlist=["ChromeSlot"])
+    slot = dashboard.ChromeSlot(
+        "test", "test", "http://127.0.0.1:9222", SimpleNamespace(input_csv=Path("input.csv"))
+    )
+    monkeypatch.setattr(slot, "_run", lambda *_args: None)
+
+    slot.start_run(limit=3, max_results=100, post_delay=6, start_index=3)
+    slot.worker.join(timeout=1)
+
+    assert slot.completed_count == 2
+    assert [task["status"] for task in slot.tasks] == ["resumed", "resumed", "pending"]
+
+
 def test_dashboard_classifies_cdp_tabs_without_query_details():
     assert classify_cdp_page_urls(["https://images.google.com/search?q=private"]) == "normal"
     assert classify_cdp_page_urls(["https://www.google.com/sorry/index?q=token"]) == "challenge"

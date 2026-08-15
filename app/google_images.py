@@ -855,12 +855,26 @@ class GoogleImagesBrowser:
         except Exception:
             return ""
 
-    def refresh_page_binding(self) -> bool:
+    def refresh_page_binding(self, prefer_normal_google_page: bool = False) -> bool:
         """Rebind when completing a challenge replaces the original tab target."""
         if not self.context:
             return False
         try:
             pages = list(self.context.pages)
+            google_pages = [page for page in pages if is_google_host(hostname(page.url))]
+            if prefer_normal_google_page:
+                normal_google_pages = [
+                    page
+                    for page in google_pages
+                    if "/sorry/" not in (urlsplit(page.url).path or "").lower()
+                    and not (urlsplit(page.url).hostname or "").lower().startswith("consent.google.")
+                ]
+                if normal_google_pages and normal_google_pages[-1] is not self.page:
+                    replacement = normal_google_pages[-1]
+                    self.page = replacement
+                    self.page.set_default_navigation_timeout(self.cfg.navigation_timeout_ms)
+                    self.page.set_default_timeout(10000)
+                    return True
             current_is_live = bool(
                 self.page
                 and not self.page.is_closed()
@@ -868,7 +882,6 @@ class GoogleImagesBrowser:
             )
             if current_is_live:
                 return False
-            google_pages = [page for page in pages if is_google_host(hostname(page.url))]
             replacement = google_pages[-1] if google_pages else (pages[-1] if pages else None)
             if replacement is None:
                 return False

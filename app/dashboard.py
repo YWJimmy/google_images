@@ -50,6 +50,7 @@ TASK_LABELS = {
     "navigation_error": "导航错误",
     "error": "内部错误",
     "stopped": "已停止",
+    "resumed": "此前已完成",
 }
 
 
@@ -153,7 +154,9 @@ class ChromeSlot:
                 "tasks": [dict(task) for task in self.tasks],
             }
 
-    def start_run(self, limit: int, max_results: int, post_delay: float) -> None:
+    def start_run(
+        self, limit: int, max_results: int, post_delay: float, start_index: int = 1
+    ) -> None:
         with self.lock:
             if self.active:
                 raise ValueError("this Chrome window already has an active task")
@@ -162,13 +165,15 @@ class ChromeSlot:
             source_tasks = load_tasks(self.cfg.input_csv, limit)
             if not source_tasks:
                 raise ValueError("no valid keyword tasks found")
+            if not (1 <= start_index <= len(source_tasks)):
+                raise ValueError("start_index must be within the selected sample range")
             self.tasks = [
                 {
                     "index": index,
                     "keyword": task.keyword,
                     "target_domain": task.target_domain,
-                    "status": "pending",
-                    "status_label": TASK_LABELS["pending"],
+                    "status": "resumed" if index < start_index else "pending",
+                    "status_label": TASK_LABELS["resumed" if index < start_index else "pending"],
                     "rank": None,
                     "resolved_count": None,
                     "elapsed_ms": None,
@@ -178,14 +183,14 @@ class ChromeSlot:
                 for index, task in enumerate(source_tasks, start=1)
             ]
             self.stop_event.clear()
-            self.completed_count = 0
+            self.completed_count = start_index - 1
             self.current_index = None
             self.page_state = "unknown"
             self.run_state = "starting"
             self.message = ""
             self.worker = threading.Thread(
                 target=self._run,
-                args=(source_tasks, max_results, post_delay),
+                args=(source_tasks, max_results, post_delay, start_index),
                 name=f"chrome-run-{self.id}",
                 daemon=True,
             )
@@ -211,7 +216,7 @@ class ChromeSlot:
             if self.stop_event.wait(HUMAN_POLL_SECONDS):
                 return False
             try:
-                browser.refresh_page_binding()
+                browser.refresh_page_binding(prefer_normal_google_page=True)
                 page_state, _ = browser.page_state()
             except Exception:
                 page_state = "unknown"
@@ -222,7 +227,9 @@ class ChromeSlot:
                 return True
         return False
 
-    def _run(self, source_tasks, max_results: int, post_delay: float) -> None:
+    def _run(
+        self, source_tasks, max_results: int, post_delay: float, start_index: int = 1
+    ) -> None:
         browser = GoogleImagesBrowser(
             replace(self.cfg, session_mode="manual_cdp", cdp_endpoint=self.endpoint)
         )
@@ -231,7 +238,7 @@ class ChromeSlot:
             with self.lock:
                 self.run_state = "running"
                 self.chrome_online = True
-            for index, task in enumerate(source_tasks, start=1):
+            for index, task in enumerate(source_tasks[start_index - 1 :], start=start_index):
                 if self.stop_event.is_set():
                     break
                 with self.lock:
@@ -491,11 +498,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 limit = int(payload.get("limit", 50))
                 max_results = int(payload.get("max_results", 100))
                 delay = float(payload.get("post_search_delay_seconds", 6))
+                start_index = int(payload.get("start_index", 1))
                 if not (1 <= limit <= 1000):
                     raise ValueError("limit must be between 1 and 1000")
                 if not (1 <= max_results <= 100) or delay < 0:
                     raise ValueError("invalid max_results or delay")
-                slot.start_run(limit, max_results, delay)
+                slot.start_run(limit, max_results, delay, start_index)
             elif self.path == "/api/stop":
                 slot.stop()
             elif self.path == "/api/history":

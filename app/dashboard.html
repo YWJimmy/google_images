@@ -71,6 +71,7 @@
   <section class="panel">
     <div class="toolbar">
       <label>样本数<input id="limit" type="number" min="1" max="1000" value="50"></label>
+      <label>从第几项开始<input id="startIndex" type="number" min="1" max="1000" value="1"></label>
       <label>Top N<input id="maxResults" type="number" min="1" max="100" value="100"></label>
       <label>搜索后等待（秒）<input id="delay" type="number" min="0" step="0.5" value="6"></label>
       <button id="start">开始任务</button><button id="stop" class="stop" disabled>停止</button>
@@ -101,6 +102,6 @@ async function action(path,data={},includeChrome=true){if(includeChrome)data.chr
 $('chromeSelect').onchange=()=>{selectedId=$('chromeSelect').value;refresh()};
 $('addChrome').onclick=async()=>{const result=await action('/api/chromes',{label:$('chromeLabel').value,endpoint:$('chromeEndpoint').value},false);if(result){selectedId=result.chrome_id;await refresh()}};
 $('addHistory').onclick=()=>action('/api/history',{url:$('historyUrl').value});
-$('start').onclick=()=>action('/api/start',{limit:+$('limit').value,max_results:+$('maxResults').value,post_search_delay_seconds:+$('delay').value}); $('stop').onclick=()=>action('/api/stop');
+$('start').onclick=()=>action('/api/start',{limit:+$('limit').value,start_index:+$('startIndex').value,max_results:+$('maxResults').value,post_search_delay_seconds:+$('delay').value}); $('stop').onclick=()=>action('/api/stop');
 refresh(); setInterval(refresh,2000);
 </script></body></html>
