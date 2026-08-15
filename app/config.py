@@ -31,6 +31,7 @@ class Config:
     browser_channel: str
     headless: bool
     session_mode: str
+    cdp_endpoint: str
     profile_dir: Path
     storage_state_path: Path
     persist_storage_state_updates: bool
@@ -71,6 +72,7 @@ def load_config(path: str | Path) -> Config:
         browser_channel=str(raw.get("browser_channel", "chrome")),
         headless=_as_bool(raw.get("headless", False), "headless"),
         session_mode=str(raw.get("session_mode", "persistent_profile")).strip().lower(),
+        cdp_endpoint=str(raw.get("cdp_endpoint", "http://127.0.0.1:9222")).strip(),
         profile_dir=(base / raw.get("profile_dir", "profile/google_profile")).resolve(),
         storage_state_path=(base / raw.get("storage_state_path", "private/google_state.json")).resolve(),
         persist_storage_state_updates=_as_bool(
@@ -95,8 +97,12 @@ def load_config(path: str | Path) -> Config:
         raise ValueError("daily_limit and run_hours must be > 0")
     if not (1 <= cfg.max_results <= 100):
         raise ValueError("max_results must be between 1 and 100 in v1")
-    if cfg.session_mode not in {"persistent_profile", "storage_state"}:
-        raise ValueError("session_mode must be persistent_profile or storage_state")
+    if cfg.session_mode not in {"persistent_profile", "storage_state", "manual_cdp"}:
+        raise ValueError(
+            "session_mode must be persistent_profile, storage_state, or manual_cdp"
+        )
+    if cfg.session_mode == "manual_cdp" and not cfg.cdp_endpoint:
+        raise ValueError("cdp_endpoint is required for session_mode=manual_cdp")
     if cfg.search_navigation not in {"homepage", "direct"}:
         raise ValueError("search_navigation must be homepage or direct")
     if cfg.results_load_wait_ms <= 0 or cfg.results_poll_interval_ms <= 0:

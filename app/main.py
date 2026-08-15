@@ -49,6 +49,7 @@ def main():
         print(f"input_csv={cfg.input_csv}")
         print(f"profile_dir={cfg.profile_dir}")
         print(f"session_mode={cfg.session_mode}")
+        print(f"cdp_endpoint={cfg.cdp_endpoint if cfg.session_mode == 'manual_cdp' else 'not_used'}")
         print(f"storage_state_path={cfg.storage_state_path}")
         return
     if args.diagnose:

@@ -441,6 +441,15 @@ require_google_com_host: true
 session_mode: "persistent_profile"
 ```
 
+如需让自动搜索、Chrome 历史记录和人工验证都发生在当前可见的专用窗口中，先运行 `start_manual_state_chrome_windows.bat` 并保持窗口打开，再设置：
+
+```yaml
+session_mode: "manual_cdp"
+cdp_endpoint: "http://127.0.0.1:9222"
+```
+
+`manual_cdp` 会直接复用该 Chrome 的现有 context 和 Google 标签页。程序结束时只断开调试连接，不关闭窗口；如果检测到 challenge，也会停止并把页面留在窗口中供人工处理。该模式不会读取、复制或提交 Chrome History 文件，但通过同一窗口产生的正常导航会由 Chrome 自身记录。
+
 `homepage` 模式先访问 `https://images.google.com/ncr`。入口应落到 `images.google.com`；若仍落到 `images.google.com.hk` 等国家/地区域名，并且 `require_google_com_host: true`，程序会按导航错误停止。通过首页搜索框提交后，Google Images 结果页显示为 `www.google.com/search?...&udm=2` 是正常行为。
 
 诊断 JSON 会记录 `images_home_url` 和 `images_home_landing_url`，用于确认 `/ncr` 是否实际生效。该设置只能固定入口域名，不能保证消除 Google challenge。

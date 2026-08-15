@@ -21,7 +21,9 @@ headless: false                 # keep visible for transparency / manual inspect
 # Session mode:
 # - persistent_profile: use the dedicated profile_dir below.
 # - storage_state: import a manually captured Cookie/LocalStorage snapshot.
+# - manual_cdp: attach to the visible dedicated Chrome already running on port 9222.
 session_mode: "persistent_profile"
+cdp_endpoint: "http://127.0.0.1:9222"
 profile_dir: "profile/google_profile"
 storage_state_path: "private/google_state.json"
 # Safer default: do not overwrite the manually captured snapshot after automation.

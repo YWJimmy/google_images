@@ -116,6 +116,7 @@ class GoogleImagesBrowser:
         self.context = None
         self.page = None
         self.launch_args = ["--disable-notifications"]
+        self._attached_over_cdp = False
         self._search_session_initialized = False
         self.last_source_observations: list[SourceDomainObservation] = []
         self.last_search_metrics = {
@@ -128,7 +129,15 @@ class GoogleImagesBrowser:
     def start(self):
         try:
             self.pw = sync_playwright().start()
-            if self.cfg.session_mode == "storage_state":
+            if self.cfg.session_mode == "manual_cdp":
+                self.browser = self.pw.chromium.connect_over_cdp(self.cfg.cdp_endpoint)
+                if not self.browser.contexts:
+                    raise BrowserLaunchError(
+                        f"no Chrome context available at {self.cfg.cdp_endpoint}"
+                    )
+                self._attached_over_cdp = True
+                self.context = self.browser.contexts[0]
+            elif self.cfg.session_mode == "storage_state":
                 if not self.cfg.storage_state_path.is_file():
                     raise FileNotFoundError(
                         f"storage state not found: {self.cfg.storage_state_path}; "
@@ -154,7 +163,16 @@ class GoogleImagesBrowser:
                     viewport={"width": self.cfg.viewport_width, "height": self.cfg.viewport_height},
                     args=self.launch_args,
                 )
-            self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+            google_pages = [
+                page
+                for page in self.context.pages
+                if is_google_host(hostname(page.url))
+            ]
+            if self.cfg.session_mode == "manual_cdp" and google_pages:
+                self.page = google_pages[-1]
+                self.page.bring_to_front()
+            else:
+                self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.page.set_default_navigation_timeout(self.cfg.navigation_timeout_ms)
             self.page.set_default_timeout(10000)
             return self
@@ -173,16 +191,17 @@ class GoogleImagesBrowser:
                 self.context.storage_state(path=str(self.cfg.storage_state_path))
             except Exception:
                 pass
-        try:
-            if self.context:
-                self.context.close()
-        except Exception:
-            pass
-        try:
-            if self.browser:
-                self.browser.close()
-        except Exception:
-            pass
+        if not self._attached_over_cdp:
+            try:
+                if self.context:
+                    self.context.close()
+            except Exception:
+                pass
+            try:
+                if self.browser:
+                    self.browser.close()
+            except Exception:
+                pass
         try:
             if self.pw:
                 self.pw.stop()
@@ -192,6 +211,7 @@ class GoogleImagesBrowser:
         self.context = None
         self.browser = None
         self.pw = None
+        self._attached_over_cdp = False
         self._search_session_initialized = False
 
     def _build_url(self, keyword: str) -> str:

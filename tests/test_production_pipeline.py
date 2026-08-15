@@ -90,3 +90,37 @@ def test_string_false_is_not_treated_as_true():
 
 def test_source_diagnostic_has_domain_matcher_available():
     assert diagnostic_domain_matches("en.wikipedia.org", "wikipedia.org", True)
+
+
+def test_manual_cdp_close_detaches_without_closing_user_browser():
+    calls = {"context_close": 0, "browser_close": 0, "playwright_stop": 0}
+
+    class Context:
+        def close(self):
+            calls["context_close"] += 1
+
+    class Browser:
+        def close(self):
+            calls["browser_close"] += 1
+
+    class Playwright:
+        def stop(self):
+            calls["playwright_stop"] += 1
+
+    browser = GoogleImagesBrowser.__new__(GoogleImagesBrowser)
+    browser.cfg = SimpleNamespace(
+        session_mode="manual_cdp", persist_storage_state_updates=False
+    )
+    browser.context = Context()
+    browser.browser = Browser()
+    browser.pw = Playwright()
+    browser.page = object()
+    browser._attached_over_cdp = True
+    browser._search_session_initialized = True
+    browser.close()
+
+    assert calls == {
+        "context_close": 0,
+        "browser_close": 0,
+        "playwright_stop": 1,
+    }
