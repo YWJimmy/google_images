@@ -56,7 +56,7 @@ start_dashboard_windows.bat
 | 控制台 Chrome 列表 | `private/dashboard_chromes.json` | 被 Git 忽略 |
 | 捕获的 Google 会话状态 | `private/google_state.json` | 被 Git 忽略，应视作凭据 |
 | 诊断日志 | `logs/diagnostics/` | `logs/` 被 Git 忽略；仍不应对外发送原始日志 |
-| 运行与验证统计 | `logs/collection_telemetry.sqlite3` | 只记录序号、时间和状态，不记录关键词、域名、URL、Cookie 或密钥；`logs/` 被 Git 忽略 |
+| 运行与验证统计 | `logs/collection_telemetry.sqlite3` | 记录运行编号、验证次数编号、样本/搜索/尝试编号、Profile、脱敏 IP、代理状态与延时；不记录关键词、域名、完整 IP、URL、Cookie 或密钥；`logs/` 被 Git 忽略 |
 | 排名数据库 | `rank_tracker.sqlite3` | `*.sqlite3` 被 Git 忽略 |
 
 控制台不会把密钥显示回页面。保存成功后，输入框可以留空；本机服务会在请求 Clash 控制器时临时解密。该密文通常只有同一台 Windows 上的同一用户可以解密。重装系统、切换用户或迁移文件后可能无法恢复，请保留密钥的独立安全备份。
@@ -102,6 +102,10 @@ git check-ignore -v rank_tracker.sqlite3
 如果多个 Profile 都指向同一个 Clash 混合端口，它们通常仍共享同一个当前节点和公网出口。修改运行中 Chrome 的代理后，需要关闭该专用 Chrome 再重新打开才会生效。
 
 “测出口与延时”会显示脱敏 IP、请求往返延时、检查时间和可用状态。检测到 Google 验证时，对应出口会显示“该出口出现验证”，任务保持暂停。系统不会把验证事件用于自动换 IP；用户可以人工修改代理或在 Clash 控制器中人工切换，再完成验证并继续。
+
+每次仪表盘排名任务、Top-N 来源测试和正式日常采集都会建立独立运行记录。遇到 challenge 或 consent 时，验证事件从 `1` 开始编号，并保存：本次第几次验证、样本编号、实际搜索编号、该关键词的尝试次数、验证前已完成数量、Profile/Chrome、最近一次脱敏出口 IP、代理状态、延时和出口检查时间。控制台“最近人工验证记录”显示最近 50 条。
+
+IP 信息是最近一次“测出口与延时”的隐私安全快照，而不是在验证时重新请求外部 IP 服务。如果没有检查记录，数据库会保存 `unconfigured`、`unchecked` 或 `direct` 状态以及空 IP，避免误把未知出口当成已确认出口。
 
 ## 6. 故障排查
 

@@ -8,7 +8,11 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from .collection_telemetry import CollectionTelemetry, telemetry_path
+from .collection_telemetry import (
+    CollectionTelemetry,
+    profile_network_snapshot,
+    telemetry_path,
+)
 from .config import Config
 from .models import ImageItem, KeywordTask
 from .ranking import domain_matches, hostname, is_google_host
@@ -844,6 +848,7 @@ class GoogleImagesBrowser:
                 "retry_count": 0,
                 "recovery": "none",
                 "timeout_stage": None,
+                "verification_ordinal": None,
                 "sample_time_budget_seconds": round(fair_share_seconds, 3),
             }
             previous_sample_started = sample_started
@@ -931,7 +936,11 @@ class GoogleImagesBrowser:
                 stopped_reason = "challenge"
                 if telemetry_run_id:
                     try:
-                        telemetry.record_human_verification(
+                        network = profile_network_snapshot(
+                            Path(self.cfg.log_dir).parent,
+                            str(getattr(self.cfg, "cdp_endpoint", "")),
+                        )
+                        sample["verification_ordinal"] = telemetry.record_human_verification(
                             run_id=telemetry_run_id,
                             event_type="challenge",
                             task_index=sample_index,
@@ -940,6 +949,7 @@ class GoogleImagesBrowser:
                             completed_before=sample_index - 1,
                             actual_start_gap_ms=sample["start_gap_ms"],
                             configured_delay_seconds=post_search_delay_seconds,
+                            **network,
                         )
                     except Exception as exc:
                         telemetry_error = type(exc).__name__
@@ -948,7 +958,11 @@ class GoogleImagesBrowser:
                 stopped_reason = "consent"
                 if telemetry_run_id:
                     try:
-                        telemetry.record_human_verification(
+                        network = profile_network_snapshot(
+                            Path(self.cfg.log_dir).parent,
+                            str(getattr(self.cfg, "cdp_endpoint", "")),
+                        )
+                        sample["verification_ordinal"] = telemetry.record_human_verification(
                             run_id=telemetry_run_id,
                             event_type="consent",
                             task_index=sample_index,
@@ -957,6 +971,7 @@ class GoogleImagesBrowser:
                             completed_before=sample_index - 1,
                             actual_start_gap_ms=sample["start_gap_ms"],
                             configured_delay_seconds=post_search_delay_seconds,
+                            **network,
                         )
                     except Exception as exc:
                         telemetry_error = type(exc).__name__

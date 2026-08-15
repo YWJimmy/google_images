@@ -19,7 +19,11 @@ import webbrowser
 
 from .config import Config, load_config
 from .chrome_profile_tool import DEFAULT_START_URL, DedicatedChromeProfiles, endpoint_online
-from .collection_telemetry import CollectionTelemetry, telemetry_path
+from .collection_telemetry import (
+    CollectionTelemetry,
+    profile_network_snapshot,
+    telemetry_path,
+)
 from .clash_controller import (
     ClashController,
     masked_proxy_egress,
@@ -210,6 +214,7 @@ class ChromeSlot:
                     "timing": "",
                     "timeout_stage": None,
                     "retry_action": None,
+                    "verification_ordinal": None,
                     "attempts": 0,
                 }
                 for index, task in enumerate(source_tasks, start=1)
@@ -348,9 +353,13 @@ class ChromeSlot:
                     except (ChallengeDetected, ConsentRequired) as exc:
                         waiting_state = "challenge" if isinstance(exc, ChallengeDetected) else "consent"
                         self.verification_count += 1
+                        verification_ordinal = self.verification_count
                         if self.telemetry_run_id:
                             try:
-                                self.telemetry.record_human_verification(
+                                network = profile_network_snapshot(
+                                    self.cfg.log_dir.parent, self.endpoint
+                                )
+                                verification_ordinal = self.telemetry.record_human_verification(
                                     run_id=self.telemetry_run_id,
                                     event_type=waiting_state,
                                     task_index=index,
@@ -360,10 +369,16 @@ class ChromeSlot:
                                     actual_start_gap_ms=actual_start_gap_ms,
                                     configured_delay_seconds=post_delay,
                                     chrome_id=self.id,
+                                    **network,
                                 )
                             except Exception as telemetry_exc:
                                 self.telemetry_error = type(telemetry_exc).__name__
-                        self._set_task(index, status="waiting_for_human", message=str(exc))
+                        self._set_task(
+                            index,
+                            status="waiting_for_human",
+                            verification_ordinal=verification_ordinal,
+                            message=f"本次运行第 {verification_ordinal} 次验证：{exc}",
+                        )
                         with self.lock:
                             self.run_state = "waiting_for_human"
                             self.page_state = waiting_state
@@ -909,6 +924,11 @@ class DashboardManager:
                 raise ValueError("selected Chrome already has an active dashboard task")
         self.operations.start(action, payload)
 
+    def recent_verification_events(self, limit: int = 50) -> list[dict]:
+        return CollectionTelemetry(telemetry_path(self.cfg.log_dir)).recent_events(
+            max(1, min(int(limit), 200))
+        )
+
 
 class DashboardHandler(BaseHTTPRequestHandler):
     server: "DashboardServer"
@@ -960,6 +980,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parts.path == "/api/settings":
             self._json(self.server.manager.secret_store.public_settings())
+            return
+        if parts.path == "/api/verification-events":
+            raw_limit = parse_qs(parts.query).get("limit", ["50"])[0]
+            self._json(
+                {"events": self.server.manager.recent_verification_events(int(raw_limit))}
+            )
             return
         self._json({"error": "not found"}, 404)
 

@@ -495,6 +495,8 @@ Clash API 密钥可只用于当前页面，也可保存到被 Git 忽略的 `pri
 
 每个专用 Chrome 还可绑定一个独立的本机 HTTP 代理监听端口，并在控制台显示脱敏出口 IP、可用状态和延时。多个 Chrome 需要使用不同出口时，代理软件也必须提供分别路由的本机端口；共用同一个 Clash 混合端口不会形成独立出口。验证事件只会暂停任务并标记当前出口，不会自动换 IP。
 
+仪表盘任务、Top-N 来源测试和正式采集会把 challenge/consent 事件统一写入被 Git 忽略的 `logs/collection_telemetry.sqlite3`。每个运行内从第 1 次验证开始编号，同时记录样本、搜索、尝试编号及最近一次脱敏 IP、代理状态和延时；不保存关键词、完整 IP、Cookie 或验证内容。
+
 ### 创建多个专用 Chrome Profile
 
 双击：

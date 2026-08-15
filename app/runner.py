@@ -4,6 +4,11 @@ import logging
 import time
 
 from .config import Config
+from .collection_telemetry import (
+    CollectionTelemetry,
+    profile_network_snapshot,
+    telemetry_path,
+)
 from .error_codes import describe
 from .google_images import (
     GoogleImagesBrowser,
@@ -53,10 +58,31 @@ def run(cfg: Config, limit_override: int | None = None) -> int:
 
     interval = cfg.run_hours * 3600 / len(pending)
     browser = GoogleImagesBrowser(cfg)
+    telemetry = CollectionTelemetry(telemetry_path(cfg.log_dir))
+    telemetry_run_id = None
+    try:
+        telemetry_run_id = telemetry.start_run(
+            mode="daily_run",
+            requested_count=len(pending),
+            configured_delay_seconds=interval,
+            session_mode=cfg.session_mode,
+        )
+    except Exception as exc:
+        logger.warning("Telemetry start failed: %s", type(exc).__name__)
 
     try:
         browser.start()
     except BrowserLaunchError as exc:
+        if telemetry_run_id:
+            try:
+                telemetry.finish_run(
+                    telemetry_run_id,
+                    status="browser_launch_error",
+                    completed_count=0,
+                    search_attempt_count=0,
+                )
+            except Exception:
+                pass
         logger.error("Browser launch failed: %s", exc)
         conn.close()
         raise
@@ -68,6 +94,9 @@ def run(cfg: Config, limit_override: int | None = None) -> int:
     t0 = time.monotonic()
     stop_run = False
     process_exit_code = 0
+    completed_count = 0
+    previous_search_started = None
+    final_status = "running"
 
     try:
         for idx, task in enumerate(pending):
@@ -76,6 +105,18 @@ def run(cfg: Config, limit_override: int | None = None) -> int:
             if delay > 0:
                 time.sleep(delay)
 
+            search_started = time.monotonic()
+            actual_start_gap_ms = (
+                round((search_started - previous_search_started) * 1000)
+                if previous_search_started is not None
+                else None
+            )
+            previous_search_started = search_started
+            if telemetry_run_id:
+                try:
+                    telemetry.update_attempt_count(telemetry_run_id, idx + 1)
+                except Exception as exc:
+                    logger.warning("Telemetry update failed: %s", type(exc).__name__)
             logger.info("[%d/%d] SEARCH %s | target=%s", idx+1, len(pending), task.keyword, task.target_domain)
             items = []
             try:
@@ -106,12 +147,46 @@ def run(cfg: Config, limit_override: int | None = None) -> int:
                 )
 
             except ChallengeDetected as exc:
+                if telemetry_run_id:
+                    try:
+                        network = profile_network_snapshot(cfg.log_dir.parent, cfg.cdp_endpoint)
+                        ordinal = telemetry.record_human_verification(
+                            run_id=telemetry_run_id,
+                            event_type="challenge",
+                            task_index=idx + 1,
+                            search_sequence_number=idx + 1,
+                            task_attempt_number=1,
+                            completed_before=completed_count,
+                            actual_start_gap_ms=actual_start_gap_ms,
+                            configured_delay_seconds=interval,
+                            **network,
+                        )
+                        logger.warning("[%d/%d] verification_ordinal=%d", idx + 1, len(pending), ordinal)
+                    except Exception as telemetry_exc:
+                        logger.warning("Telemetry event failed: %s", type(telemetry_exc).__name__)
                 diag = browser.save_diagnostics(cfg.log_dir / "diagnostics", f"challenge_{run_date}_{idx+1:04d}")
                 msg = str(exc) + (f" | diagnostics={'; '.join(diag)}" if diag else "")
                 result = SearchResult(task.keyword, task.target_domain, -4, describe(-4), message=msg)
                 stop_run = True
                 process_exit_code = 4
             except ConsentRequired as exc:
+                if telemetry_run_id:
+                    try:
+                        network = profile_network_snapshot(cfg.log_dir.parent, cfg.cdp_endpoint)
+                        ordinal = telemetry.record_human_verification(
+                            run_id=telemetry_run_id,
+                            event_type="consent",
+                            task_index=idx + 1,
+                            search_sequence_number=idx + 1,
+                            task_attempt_number=1,
+                            completed_before=completed_count,
+                            actual_start_gap_ms=actual_start_gap_ms,
+                            configured_delay_seconds=interval,
+                            **network,
+                        )
+                        logger.warning("[%d/%d] verification_ordinal=%d", idx + 1, len(pending), ordinal)
+                    except Exception as telemetry_exc:
+                        logger.warning("Telemetry event failed: %s", type(telemetry_exc).__name__)
                 diag = browser.save_diagnostics(cfg.log_dir / "diagnostics", f"consent_{run_date}_{idx+1:04d}")
                 msg = str(exc) + (f" | diagnostics={'; '.join(diag)}" if diag else "")
                 result = SearchResult(task.keyword, task.target_domain, -9, describe(-9), message=msg)
@@ -131,6 +206,7 @@ def run(cfg: Config, limit_override: int | None = None) -> int:
                 process_exit_code = 2
 
             save_result(conn, run_date, result, items)
+            completed_count = idx + 1
             export_csv(conn, run_date, export_path)
             logger.info("[%d/%d] code=%d type=%s count=%d", idx+1, len(pending), result.result_code, result.result_type, result.collected_count)
 
@@ -138,9 +214,22 @@ def run(cfg: Config, limit_override: int | None = None) -> int:
                 logger.info("[%d/%d] detail=%s", idx+1, len(pending), result.message)
 
             if stop_run:
+                final_status = "challenge" if result.result_code == -4 else "consent"
                 logger.error("Google challenge/consent state detected. Run stopped; no bypass attempt will be made.")
                 break
+        if final_status == "running":
+            final_status = "complete"
     finally:
+        if telemetry_run_id:
+            try:
+                telemetry.finish_run(
+                    telemetry_run_id,
+                    status=final_status,
+                    completed_count=completed_count,
+                    search_attempt_count=completed_count,
+                )
+            except Exception as exc:
+                logger.warning("Telemetry finish failed: %s", type(exc).__name__)
         export_csv(conn, run_date, export_path)
         browser.close()
         conn.close()
