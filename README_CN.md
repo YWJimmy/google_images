@@ -493,6 +493,8 @@ Clash API 密钥可只用于当前页面，也可保存到被 Git 忽略的 `pri
 
 完整的页面功能、密钥位置、专用 Chrome 简化流程和故障排查见 [`CONSOLE_GUIDE_CN.md`](CONSOLE_GUIDE_CN.md)。
 
+每个专用 Chrome 还可绑定一个独立的本机 HTTP 代理监听端口，并在控制台显示脱敏出口 IP、可用状态和延时。多个 Chrome 需要使用不同出口时，代理软件也必须提供分别路由的本机端口；共用同一个 Clash 混合端口不会形成独立出口。验证事件只会暂停任务并标记当前出口，不会自动换 IP。
+
 ### 创建多个专用 Chrome Profile
 
 双击：

@@ -5,6 +5,7 @@ import pytest
 from app.chrome_profile_tool import (
     DedicatedChromeProfiles,
     validate_port,
+    validate_profile_proxy,
     validate_profile_name,
     validate_start_url,
 )
@@ -25,6 +26,15 @@ def test_start_url_and_port_validation():
         validate_start_url("file:///private/cookies")
     with pytest.raises(ValueError):
         validate_port(80)
+
+
+def test_profile_proxy_is_optional_and_loopback_only():
+    assert validate_profile_proxy("") == ""
+    assert validate_profile_proxy("http://127.0.0.1:7898/") == "http://127.0.0.1:7898"
+    with pytest.raises(ValueError):
+        validate_profile_proxy("http://203.0.113.10:7898")
+    with pytest.raises(ValueError):
+        validate_profile_proxy("http://user:secret@127.0.0.1:7898")
 
 
 def memory_backed_manager(monkeypatch):
@@ -52,6 +62,8 @@ def test_create_uses_private_registry_and_profile_root(monkeypatch):
         "name": "manual_01",
         "port": 9224,
         "profile_dir": str(Path("profile") / "dedicated" / "manual_01"),
+        "proxy_url": "",
+        "proxy_status": "direct",
     }
     manifest = stored[str(manager.manifest_path)]
     dashboard = stored[str(manager.dashboard_registry_path)]
@@ -73,3 +85,22 @@ def test_create_rejects_duplicate_name_or_port(monkeypatch):
         manager.create("one", 9225)
     with pytest.raises(ValueError):
         manager.create("two", 9224)
+
+
+def test_profile_proxy_assignment_is_private_and_applies_to_next_launch(monkeypatch):
+    monkeypatch.setattr("app.chrome_profile_tool.port_available", lambda _port: True)
+    manager, _stored = memory_backed_manager(monkeypatch)
+    entry = manager.create(
+        "proxy_one", 9230, proxy_url="http://127.0.0.1:7898", register_dashboard=False
+    )
+    captured = {}
+    monkeypatch.setattr("app.chrome_profile_tool.endpoint_online", lambda _port: False)
+    monkeypatch.setattr("app.chrome_profile_tool.find_chrome", lambda: Path("chrome.exe"))
+    monkeypatch.setattr(
+        "app.chrome_profile_tool.subprocess.Popen",
+        lambda args, **_kwargs: captured.setdefault("args", args),
+    )
+
+    manager.launch(entry)
+
+    assert "--proxy-server=http://127.0.0.1:7898" in captured["args"]

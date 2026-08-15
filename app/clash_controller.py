@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
@@ -107,10 +108,16 @@ def masked_proxy_egress(proxy_url: str) -> dict:
     proxy = validate_local_http_url(proxy_url, "proxy URL")
     opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
     request = Request("https://api.ipify.org", headers={"User-Agent": "google-images-local-check/1"})
+    started = time.perf_counter()
     try:
         with opener.open(request, timeout=6) as response:
             raw = response.read().decode("ascii").strip()
         address = ipaddress.ip_address(raw)
-        return {"ok": True, "family": f"IPv{address.version}", "masked_ip": mask_ip(raw)}
+        return {
+            "ok": True,
+            "family": f"IPv{address.version}",
+            "masked_ip": mask_ip(raw),
+            "latency_ms": round((time.perf_counter() - started) * 1000),
+        }
     except (HTTPError, URLError, TimeoutError, OSError, ValueError):
         raise ClashControllerError("proxy egress check failed") from None

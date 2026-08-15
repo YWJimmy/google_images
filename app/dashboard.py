@@ -750,6 +750,34 @@ class DashboardManager:
     def status(self, slot_id: str | None) -> dict:
         selected = self.get(slot_id)
         data = selected.snapshot()
+        selected_profile = next(
+            (
+                item
+                for item in self.profile_manager.entries()
+                if str(item.get("port", "")).isdigit()
+                and f"http://127.0.0.1:{int(item['port'])}" == selected.endpoint
+            ),
+            None,
+        )
+        data["proxy"] = {
+            "proxy_url": "",
+            "proxy_status": "unconfigured",
+            "masked_ip": None,
+            "proxy_latency_ms": None,
+            "proxy_checked_at": None,
+        }
+        if selected_profile:
+            data["proxy"].update(
+                {
+                    "proxy_url": str(selected_profile.get("proxy_url", "")),
+                    "proxy_status": str(selected_profile.get("proxy_status", "direct")),
+                    "masked_ip": selected_profile.get("masked_ip"),
+                    "proxy_latency_ms": selected_profile.get("proxy_latency_ms"),
+                    "proxy_checked_at": selected_profile.get("proxy_checked_at"),
+                }
+            )
+            if selected.page_state in {"challenge", "consent"}:
+                data["proxy"]["proxy_status"] = "verification_seen"
         data["chromes"] = [
             {
                 "id": slot.id,
@@ -766,16 +794,28 @@ class DashboardManager:
         return data
 
     def profiles(self) -> list[dict]:
-        return [
-            {
+        result = []
+        for item in self.profile_manager.entries():
+            if not str(item.get("port", "")).isdigit():
+                continue
+            endpoint = f"http://127.0.0.1:{int(item.get('port', 0))}"
+            slot = next((value for value in self.slots.values() if value.endpoint == endpoint), None)
+            profile = {
                 "name": str(item.get("name", "")),
                 "port": int(item.get("port", 0)),
-                "endpoint": f"http://127.0.0.1:{int(item.get('port', 0))}",
+                "endpoint": endpoint,
                 "online": endpoint_online(int(item.get("port", 0))),
+                "proxy_url": str(item.get("proxy_url", "")),
+                "proxy_status": str(item.get("proxy_status", "direct")),
+                "masked_ip": item.get("masked_ip"),
+                "proxy_latency_ms": item.get("proxy_latency_ms"),
+                "proxy_checked_at": item.get("proxy_checked_at"),
+                "restart_required": bool(item.get("restart_required", False)),
             }
-            for item in self.profile_manager.entries()
-            if str(item.get("port", "")).isdigit()
-        ]
+            if slot and slot.page_state in {"challenge", "consent"}:
+                profile["proxy_status"] = "verification_seen"
+            result.append(profile)
+        return result
 
     def profile_suggestion(self) -> dict:
         names = {str(item.get("name", "")) for item in self.profile_manager.entries()}
@@ -788,9 +828,11 @@ class DashboardManager:
             "url": DEFAULT_START_URL,
         }
 
-    def create_profile(self, name: str, port: int | None, url: str) -> dict:
+    def create_profile(self, name: str, port: int | None, url: str, proxy_url: str = "") -> dict:
         selected_port = port if port is not None else self.profile_manager.suggest_port()
-        entry = self.profile_manager.create(name, selected_port, register_dashboard=False)
+        entry = self.profile_manager.create(
+            name, selected_port, proxy_url=proxy_url, register_dashboard=False
+        )
         endpoint = f"http://127.0.0.1:{entry['port']}"
         with self.lock:
             existing = next((slot for slot in self.slots.values() if slot.endpoint == endpoint), None)
@@ -806,6 +848,45 @@ class DashboardManager:
     def start_profile(self, name: str, url: str) -> dict:
         entry = self.profile_manager.get(name)
         return {"launch_state": self.profile_manager.launch(entry, url), **entry}
+
+    def set_profile_proxy(self, name: str, proxy_url: str) -> dict:
+        entry = self.profile_manager.get(name)
+        online = endpoint_online(int(entry["port"]))
+        updated = self.profile_manager.update_proxy(name, proxy_url)
+        if online:
+            updated = self.profile_manager.update_proxy_status(name, restart_required=True)
+        return {"ok": True, "online": online, **updated}
+
+    def check_profile_proxy(self, name: str) -> dict:
+        entry = self.profile_manager.get(name)
+        proxy_url = str(entry.get("proxy_url", ""))
+        if not proxy_url:
+            return self.profile_manager.update_proxy_status(
+                name,
+                proxy_status="direct",
+                masked_ip=None,
+                proxy_latency_ms=None,
+                proxy_checked_at=datetime.now().isoformat(timespec="seconds"),
+            )
+        try:
+            result = masked_proxy_egress(proxy_url)
+            self.profile_manager.update_proxy_status(
+                name,
+                proxy_status="online",
+                masked_ip=result["masked_ip"],
+                proxy_latency_ms=result["latency_ms"],
+                proxy_checked_at=datetime.now().isoformat(timespec="seconds"),
+            )
+            return {"name": name, **result}
+        except Exception:
+            self.profile_manager.update_proxy_status(
+                name,
+                proxy_status="unreachable",
+                masked_ip=None,
+                proxy_latency_ms=None,
+                proxy_checked_at=datetime.now().isoformat(timespec="seconds"),
+            )
+            raise
 
     def start_operation(self, action: str, payload: dict) -> None:
         endpoint = payload.get("endpoint")
@@ -885,6 +966,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     str(payload.get("name", "")),
                     int(raw_port) if raw_port not in {None, ""} else None,
                     str(payload.get("url", DEFAULT_START_URL)),
+                    str(payload.get("proxy_url", "")),
                 )
                 self._json({"ok": True, **result})
                 return
@@ -893,6 +975,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     str(payload.get("name", "")),
                     str(payload.get("url", DEFAULT_START_URL)),
                 )
+                self._json({"ok": True, **result})
+                return
+            if self.path == "/api/profiles/proxy":
+                result = self.server.manager.set_profile_proxy(
+                    str(payload.get("name", "")), str(payload.get("proxy_url", ""))
+                )
+                self._json(result)
+                return
+            if self.path == "/api/profiles/proxy-check":
+                result = self.server.manager.check_profile_proxy(str(payload.get("name", "")))
                 self._json({"ok": True, **result})
                 return
             if self.path == "/api/operations/start":

@@ -47,6 +47,26 @@ def validate_start_url(value: str) -> str:
     return url
 
 
+def validate_profile_proxy(value: str) -> str:
+    """Allow direct access or an unauthenticated loopback HTTP proxy."""
+    proxy = value.strip().rstrip("/")
+    if not proxy:
+        return ""
+    parts = urlsplit(proxy)
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or not parts.port
+        or parts.username
+        or parts.password
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError("Profile proxy must be an unauthenticated local http URL with a port")
+    return proxy
+
+
 def find_chrome() -> Path:
     candidates = []
     for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
@@ -120,7 +140,9 @@ class DedicatedChromeProfiles:
                 return item
         raise KeyError(f"未找到专用 Profile：{normalized}")
 
-    def create(self, name: str, port: int, *, register_dashboard: bool = True) -> dict:
+    def create(
+        self, name: str, port: int, *, proxy_url: str = "", register_dashboard: bool = True
+    ) -> dict:
         normalized = validate_profile_name(name)
         validated_port = validate_port(port)
         entries = self.entries()
@@ -139,12 +161,44 @@ class DedicatedChromeProfiles:
             "name": normalized,
             "port": validated_port,
             "profile_dir": str(profile_dir.relative_to(self.root)),
+            "proxy_url": validate_profile_proxy(proxy_url),
+            "proxy_status": "unchecked" if proxy_url.strip() else "direct",
         }
         entries.append(entry)
         _write_json_private(self.manifest_path, entries)
         if register_dashboard:
             self.register_dashboard(entry)
         return entry
+
+    def update_proxy(self, name: str, proxy_url: str) -> dict:
+        normalized = validate_profile_name(name)
+        value = validate_profile_proxy(proxy_url)
+        entries = self.entries()
+        entry = next((item for item in entries if item.get("name") == normalized), None)
+        if entry is None:
+            raise KeyError(f"Profile not found: {normalized}")
+        entry.update(
+            {
+                "proxy_url": value,
+                "proxy_status": "unchecked" if value else "direct",
+                "masked_ip": None,
+                "proxy_latency_ms": None,
+                "proxy_checked_at": None,
+                "restart_required": False,
+            }
+        )
+        _write_json_private(self.manifest_path, entries)
+        return dict(entry)
+
+    def update_proxy_status(self, name: str, **status) -> dict:
+        normalized = validate_profile_name(name)
+        entries = self.entries()
+        entry = next((item for item in entries if item.get("name") == normalized), None)
+        if entry is None:
+            raise KeyError(f"Profile not found: {normalized}")
+        entry.update(status)
+        _write_json_private(self.manifest_path, entries)
+        return dict(entry)
 
     def register_dashboard(self, entry: dict) -> None:
         endpoint = f"http://127.0.0.1:{entry['port']}"
@@ -187,6 +241,9 @@ class DedicatedChromeProfiles:
                     "--new-window",
                 ]
             )
+            proxy_url = validate_profile_proxy(str(entry.get("proxy_url", "")))
+            if proxy_url:
+                args.append(f"--proxy-server={proxy_url}")
         args.append(url)
         subprocess.Popen(args, cwd=str(self.root))
         return "already_running" if already_running else "started"
