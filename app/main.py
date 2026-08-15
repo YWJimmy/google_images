@@ -23,7 +23,7 @@ def main():
     ap.add_argument(
         "--test-start-interval-seconds",
         type=float,
-        default=0,
+        default=10,
         help="minimum interval between consecutive test search start times",
     )
     ap.add_argument("--capture-state", action="store_true", help="capture state from a manually opened Chrome")

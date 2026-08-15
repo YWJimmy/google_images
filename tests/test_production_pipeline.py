@@ -1,8 +1,11 @@
 from types import SimpleNamespace
+import sys
+from pathlib import Path
 
 import pytest
 
 from app.config import _as_bool
+from app import main as main_module
 from app.google_images import ChallengeDetected, ConsentRequired, GoogleImagesBrowser
 from app.google_images import domain_matches as diagnostic_domain_matches
 from app.ranking_decision import decide_source_rank
@@ -124,3 +127,33 @@ def test_manual_cdp_close_detaches_without_closing_user_browser():
         "browser_close": 0,
         "playwright_stop": 1,
     }
+
+
+def test_source_test_default_start_interval_is_ten_seconds(monkeypatch):
+    captured = {}
+
+    class Config:
+        log_dir = Path(".")
+        input_csv = Path("keywords.csv")
+
+    class Browser:
+        def __init__(self, _cfg):
+            pass
+
+        def start(self):
+            return self
+
+        def test_top_image_sources(self, _directory, _tasks, _maximum, _budget, interval):
+            captured["interval"] = interval
+            return {"process_exit_code": 0}, SimpleNamespace()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(sys, "argv", ["app", "--source-domain-test"])
+    monkeypatch.setattr(main_module, "load_config", lambda _path: Config())
+    monkeypatch.setattr(main_module, "load_tasks", lambda _path, _limit: [])
+    monkeypatch.setattr(main_module, "GoogleImagesBrowser", Browser)
+    monkeypatch.setattr("builtins.print", lambda *_args, **_kwargs: None)
+    main_module.main()
+    assert captured["interval"] == 10
