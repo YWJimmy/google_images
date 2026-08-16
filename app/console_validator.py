@@ -103,7 +103,7 @@ class ConsoleValidator:
         contract = html_contract(html)
         self.check("HTML IDs are unique", not contract["duplicate_ids"], str(contract))
         self.check("JavaScript element references exist", not contract["missing_references"], str(contract))
-        for label in ("阶段耗时", "最近人工验证记录", "代理延时", "操作中心"):
+        for label in ("阶段耗时", "最近人工验证记录", "代理延时", "可用节点延迟采集", "操作中心"):
             self.check(f"page contains {label}", label in html)
 
         responses = {}

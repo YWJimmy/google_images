@@ -1065,6 +1065,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 )
                 self._json(result)
                 return
+            if self.path == "/api/clash/nodes/probe":
+                secret = self.server.manager.secret_store.clash_secret(str(payload.get("secret", "")))
+                controller = ClashController(
+                    str(payload.get("endpoint", "http://127.0.0.1:9097")),
+                    secret,
+                )
+                result = controller.probe_group_nodes(
+                    str(payload.get("group", "")),
+                    timeout_ms=int(payload.get("timeout_ms", 3000)),
+                    max_nodes=int(payload.get("max_nodes", 200)),
+                )
+                self._json(result)
+                return
             if self.path == "/api/clash/egress":
                 self._json(masked_proxy_egress(str(payload.get("proxy_url", "http://127.0.0.1:7897"))))
                 return
