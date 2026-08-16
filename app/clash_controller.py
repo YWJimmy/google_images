@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import ipaddress
 import json
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
-
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 GROUP_PROXY_TYPES = {"Selector", "URLTest", "Fallback", "LoadBalance", "Relay"}
@@ -41,6 +41,12 @@ def mask_ip(value: str) -> str:
         return ".".join([*parts[:3], "xxx"])
     parts = address.exploded.split(":")
     return ":".join(parts[:4]) + ":…"
+
+
+def _ip_fingerprint(value: str) -> str:
+    """Return a short non-reversible comparison token for an IP address."""
+    normalized = str(ipaddress.ip_address(value.strip())).encode("ascii")
+    return hashlib.sha256(normalized).hexdigest()[:16]
 
 
 class ClashController:
@@ -129,6 +135,11 @@ class ClashController:
             raise ValueError("node is not a current choice of this Selector group")
         self._request(f"/proxies/{quote(group_name, safe='')}", "PUT", {"name": node_name})
         return {"ok": True, "group": group_name, "current": node_name}
+
+    def close_connections(self) -> dict:
+        """Close Mihomo's active connections so new requests use the selected route."""
+        self._request("/connections", "DELETE")
+        return {"ok": True}
 
     def _proxy_state(self) -> dict[str, dict]:
         state = self._request("/proxies")
@@ -229,7 +240,8 @@ class ClashController:
         }
 
 
-def masked_proxy_egress(proxy_url: str) -> dict:
+def proxy_egress_identity(proxy_url: str) -> dict:
+    """Check proxy egress without returning or persisting the full IP address."""
     proxy = validate_local_http_url(proxy_url, "proxy URL")
     opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
     request = Request("https://api.ipify.org", headers={"User-Agent": "local-network-check/1"})
@@ -242,7 +254,14 @@ def masked_proxy_egress(proxy_url: str) -> dict:
             "ok": True,
             "family": f"IPv{address.version}",
             "masked_ip": mask_ip(raw),
+            "ip_fingerprint": _ip_fingerprint(raw),
             "latency_ms": round((time.perf_counter() - started) * 1000),
         }
     except (HTTPError, URLError, TimeoutError, OSError, ValueError):
         raise ClashControllerError("proxy egress check failed") from None
+
+
+def masked_proxy_egress(proxy_url: str) -> dict:
+    sample = proxy_egress_identity(proxy_url)
+    sample.pop("ip_fingerprint", None)
+    return sample
