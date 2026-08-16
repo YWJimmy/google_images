@@ -133,6 +133,7 @@ class ChromeSlot:
         self.search_attempt_count = 0
         self.verification_count = 0
         self._previous_search_started: float | None = None
+        self.clash_context_provider = None
 
     @property
     def active(self) -> bool:
@@ -359,6 +360,11 @@ class ChromeSlot:
                                 network = profile_network_snapshot(
                                     self.cfg.log_dir.parent, self.endpoint
                                 )
+                                clash_context = (
+                                    self.clash_context_provider()
+                                    if callable(self.clash_context_provider)
+                                    else {}
+                                )
                                 verification_ordinal = self.telemetry.record_human_verification(
                                     run_id=self.telemetry_run_id,
                                     event_type=waiting_state,
@@ -369,6 +375,8 @@ class ChromeSlot:
                                     actual_start_gap_ms=actual_start_gap_ms,
                                     configured_delay_seconds=post_delay,
                                     chrome_id=self.id,
+                                    clash_group=clash_context.get("clash_group"),
+                                    clash_node=clash_context.get("clash_node"),
                                     **network,
                                 )
                             except Exception as telemetry_exc:
@@ -727,6 +735,10 @@ class DashboardManager:
         self.root = self.config_path.parent
         self.registry_path = cfg.storage_state_path.parent / "dashboard_chromes.json"
         self.lock = threading.RLock()
+        self.clash_context: dict[str, str | None] = {
+            "clash_group": None,
+            "clash_node": None,
+        }
         self.slots: dict[str, ChromeSlot] = {}
         self.stop_event = threading.Event()
         self.operations = OperationManager(self.root, self.config_path)
@@ -747,6 +759,7 @@ class DashboardManager:
         for entry in entries:
             try:
                 slot = ChromeSlot(str(entry["id"]), str(entry["label"]), str(entry["endpoint"]), self.cfg)
+                slot.clash_context_provider = self.live_clash_context
                 self.slots[slot.id] = slot
             except Exception:
                 continue
@@ -774,6 +787,7 @@ class DashboardManager:
                 raise ValueError("this CDP endpoint already exists")
             slot_id = "chrome-" + uuid.uuid4().hex[:8]
             slot = ChromeSlot(slot_id, label.strip() or endpoint, endpoint, self.cfg)
+            slot.clash_context_provider = self.live_clash_context
             self.slots[slot_id] = slot
             self._save_registry()
             slot.probe()
@@ -942,6 +956,93 @@ class DashboardManager:
             max(1, min(int(limit), 200))
         )
 
+    def current_clash_context(self) -> dict[str, str | None]:
+        with self.lock:
+            return dict(self.clash_context)
+
+    def live_clash_context(self) -> dict[str, str | None]:
+        """Refresh the active leaf only when a verification event needs attribution."""
+        cached = self.current_clash_context()
+        group = str(cached.get("clash_group") or "")
+        if not group:
+            return cached
+        try:
+            settings = self.secret_store.public_settings()
+            controller = ClashController(
+                str(settings["clash_endpoint"]), self.secret_store.clash_secret()
+            )
+            selector = next(
+                (item for item in controller.selectors() if item.get("group") == group), None
+            )
+            if selector:
+                with self.lock:
+                    self.clash_context = {
+                        "clash_group": group,
+                        "clash_node": str(
+                            selector.get("current_leaf") or selector.get("current", "")
+                        ) or None,
+                    }
+        except Exception:
+            return cached
+        return self.current_clash_context()
+
+    def clash_status(self, endpoint: str, secret: str) -> dict:
+        controller = ClashController(endpoint, secret)
+        result = controller.status()
+        selectors = result.get("selectors", [])
+        with self.lock:
+            known_group = self.clash_context.get("clash_group")
+            selected = next(
+                (item for item in selectors if item.get("group") == known_group),
+                selectors[0] if selectors else None,
+            )
+            if selected:
+                self.clash_context = {
+                    "clash_group": str(selected.get("group", "")) or None,
+                    "clash_node": str(
+                        selected.get("current_leaf") or selected.get("current", "")
+                    ) or None,
+                }
+        return result
+
+    def switch_clash(self, endpoint: str, secret: str, group: str, node: str) -> dict:
+        controller = ClashController(endpoint, secret)
+        result = controller.switch(group, node)
+        selector = next(
+            (item for item in controller.selectors() if item.get("group") == group), None
+        )
+        current_leaf = str((selector or {}).get("current_leaf") or node)
+        with self.lock:
+            self.clash_context = {"clash_group": group, "clash_node": current_leaf}
+        return result
+
+    def probe_clash_nodes(
+        self, endpoint: str, secret: str, group: str, timeout_ms: int, max_nodes: int
+    ) -> dict:
+        controller = ClashController(endpoint, secret)
+        result = controller.probe_group_nodes(
+            group, timeout_ms=timeout_ms, max_nodes=max_nodes
+        )
+        selector = next(
+            (item for item in controller.selectors() if item.get("group") == group), None
+        )
+        if selector:
+            with self.lock:
+                self.clash_context = {
+                    "clash_group": group,
+                    "clash_node": str(
+                        selector.get("current_leaf") or selector.get("current", "")
+                    ) or None,
+                }
+        latest_by_node: dict[str, str] = {}
+        for event in self.recent_verification_events(200):
+            node = str(event.get("clash_node") or "")
+            if node and node not in latest_by_node:
+                latest_by_node[node] = str(event.get("occurred_at") or "")
+        for item in result["nodes"]:
+            item["last_verification_at"] = latest_by_node.get(str(item["name"]))
+        return result
+
 
 class DashboardHandler(BaseHTTPRequestHandler):
     server: "DashboardServer"
@@ -1048,33 +1149,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/clash/status":
                 secret = self.server.manager.secret_store.clash_secret(str(payload.get("secret", "")))
-                controller = ClashController(
+                self._json(self.server.manager.clash_status(
                     str(payload.get("endpoint", "http://127.0.0.1:9097")),
                     secret,
-                )
-                self._json(controller.status())
+                ))
                 return
             if self.path == "/api/clash/switch":
                 secret = self.server.manager.secret_store.clash_secret(str(payload.get("secret", "")))
-                controller = ClashController(
+                result = self.server.manager.switch_clash(
                     str(payload.get("endpoint", "http://127.0.0.1:9097")),
                     secret,
-                )
-                result = controller.switch(
-                    str(payload.get("group", "")), str(payload.get("node", ""))
+                    str(payload.get("group", "")),
+                    str(payload.get("node", "")),
                 )
                 self._json(result)
                 return
             if self.path == "/api/clash/nodes/probe":
                 secret = self.server.manager.secret_store.clash_secret(str(payload.get("secret", "")))
-                controller = ClashController(
+                result = self.server.manager.probe_clash_nodes(
                     str(payload.get("endpoint", "http://127.0.0.1:9097")),
                     secret,
-                )
-                result = controller.probe_group_nodes(
                     str(payload.get("group", "")),
-                    timeout_ms=int(payload.get("timeout_ms", 3000)),
-                    max_nodes=int(payload.get("max_nodes", 200)),
+                    int(payload.get("timeout_ms", 3000)),
+                    int(payload.get("max_nodes", 200)),
                 )
                 self._json(result)
                 return

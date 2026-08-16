@@ -99,7 +99,25 @@ Invoke-RestMethod `
 
 这里的延迟不是 ICMP `ping`。代理服务器经常禁用 ICMP，而 HTTP 探测更接近浏览器实际经过该代理建立连接的效果。出口 IP 仍需使用“检查脱敏出口”单独检查，并且只显示脱敏值。
 
-## 6. 隐私与仓库规则
+测速完成后，节点下拉框和结果表会显示最近延迟。新产生的 challenge/consent 记录还会保存当时控制台所选的 Clash 组与节点，并在下次测速时显示“上次触发验证”时间。升级前的历史记录没有节点字段，控制台会显示为“无记录”，不会根据时间或 IP 猜测归属。
+
+## 6. 多 Chrome 独立出口
+
+当前只配置一个本机混合代理端口时，所有使用该端口的 Chrome 共享同一套路由与 Selector 当前节点，不能保证不同出口。Mihomo 支持配置多个 `listeners`；每个回环地址上的 mixed listener 可以通过 `proxy:` 固定到不同代理节点或策略组。随后给不同专用 Chrome 分别配置对应的 `http://127.0.0.1:<端口>`，即可建立独立映射。
+
+这需要在 Clash Verge/Mihomo 配置层新增 listener 与独立策略组，当前控制台不会自动改写 Clash 配置。listener 应只监听 `127.0.0.1`，并在修改配置前备份和校验端口占用。
+
+## 7. 自动轮换纯网络测试
+
+下面的独立命令只访问 Cloudflare 204 探测地址和 ipify 出口查询，不访问 Google。它先按 Mihomo 延迟选出可直接切换的节点，再逐一切换；每个节点默认采样 10 次，完成或异常退出时都会在 `finally` 中恢复原 Selector：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.network_rotation_test --nodes 5 --samples 10
+```
+
+可用 `--group "组名"` 指定 Selector；省略时选择候选节点最多的组。默认结果写入 Git 已忽略的 `private/network_rotation_latest.json`，其中只包含节点名、脱敏出口、延迟和成功/失败统计。`--output` 也被强制限制在 `private/` 内，防止误写入可提交目录。
+
+## 8. 隐私与仓库规则
 
 以下内容不得提交到 Git：
 

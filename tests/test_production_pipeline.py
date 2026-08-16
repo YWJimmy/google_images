@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from app.config import _as_bool
 from app import main as main_module
 from app.dashboard import (
+    DashboardManager,
     HUMAN_POLL_SECONDS,
     OperationManager,
     classify_cdp_page_urls,
@@ -30,6 +32,53 @@ from app.structured_domains import SourceDomainObservation, parse_minimal_struct
 
 def resolved(rank: int, domain: str) -> SourceDomainObservation:
     return SourceDomainObservation(rank, (domain,), "resolved", "fixture")
+
+
+def test_dashboard_enriches_node_delay_with_last_verification(monkeypatch):
+    class FakeClashController:
+        def __init__(self, _endpoint, _secret):
+            self.current = "Node A"
+
+        def status(self):
+            return {
+                "online": True,
+                "version": "test",
+                "selectors": [{"group": "Proxy", "current": self.current, "current_leaf": self.current, "choices": ["Node A", "Node B"]}],
+            }
+
+        def selectors(self):
+            return [{"group": "Proxy", "current": self.current, "current_leaf": self.current, "choices": ["Node A", "Node B"]}]
+
+        def probe_group_nodes(self, _group, *, timeout_ms, max_nodes):
+            assert (timeout_ms, max_nodes) == (3000, 200)
+            return {"nodes": [{"name": "Node A", "usable": True, "delay_ms": 88}]}
+
+        def switch(self, group, node):
+            self.current = node
+            return {"ok": True, "group": group, "current": node}
+
+    monkeypatch.setattr("app.dashboard.ClashController", FakeClashController)
+    manager = DashboardManager.__new__(DashboardManager)
+    manager.lock = threading.RLock()
+    manager.clash_context = {"clash_group": None, "clash_node": None}
+    manager.recent_verification_events = lambda _limit: [
+        {"clash_node": "Node A", "occurred_at": "2026-08-16T20:00:00+08:00"}
+    ]
+    manager.secret_store = SimpleNamespace(
+        public_settings=lambda: {"clash_endpoint": "http://127.0.0.1:9097"},
+        clash_secret=lambda: "secret",
+    )
+
+    status = manager.clash_status("http://127.0.0.1:9097", "secret")
+    assert status["selectors"][0]["current"] == "Node A"
+    result = manager.probe_clash_nodes(
+        "http://127.0.0.1:9097", "secret", "Proxy", 3000, 200
+    )
+    assert result["nodes"][0]["last_verification_at"] == "2026-08-16T20:00:00+08:00"
+    assert manager.current_clash_context()["clash_node"] == "Node A"
+    assert manager.live_clash_context()["clash_node"] == "Node A"
+    manager.switch_clash("http://127.0.0.1:9097", "secret", "Proxy", "Node B")
+    assert manager.current_clash_context()["clash_node"] == "Node B"
 
 
 def test_exact_hit_requires_all_preceding_positions_to_be_resolved():

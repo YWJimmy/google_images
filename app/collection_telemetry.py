@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS collection_events (
     ip_event_status TEXT,
     proxy_latency_ms INTEGER,
     egress_checked_at TEXT,
+    clash_group TEXT,
+    clash_node TEXT,
     FOREIGN KEY(run_id) REFERENCES collection_runs(run_id) ON DELETE CASCADE
 );
 
@@ -65,6 +67,8 @@ EVENT_MIGRATIONS = {
     "ip_event_status": "TEXT",
     "proxy_latency_ms": "INTEGER",
     "egress_checked_at": "TEXT",
+    "clash_group": "TEXT",
+    "clash_node": "TEXT",
 }
 
 
@@ -153,6 +157,8 @@ class CollectionTelemetry:
         ip_event_status: str = "verification_seen",
         proxy_latency_ms: int | None = None,
         egress_checked_at: str | None = None,
+        clash_group: str | None = None,
+        clash_node: str | None = None,
     ) -> int:
         if event_type not in {"challenge", "consent"}:
             raise ValueError("event_type must be challenge or consent")
@@ -169,8 +175,9 @@ class CollectionTelemetry:
                     search_sequence_number, task_attempt_number, completed_before,
                     actual_start_gap_ms, configured_delay_seconds, chrome_id,
                     verification_ordinal, profile_name, masked_ip, proxy_status,
-                    ip_event_status, proxy_latency_ms, egress_checked_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ip_event_status, proxy_latency_ms, egress_checked_at,
+                    clash_group, clash_node
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     _now(),
@@ -189,6 +196,8 @@ class CollectionTelemetry:
                     ip_event_status,
                     proxy_latency_ms,
                     egress_checked_at,
+                    clash_group,
+                    clash_node,
                 ),
             )
             conn.execute(
@@ -233,7 +242,7 @@ class CollectionTelemetry:
                           e.configured_delay_seconds, e.chrome_id,
                           e.verification_ordinal, e.profile_name, e.masked_ip,
                           e.proxy_status, e.ip_event_status, e.proxy_latency_ms,
-                          e.egress_checked_at,
+                          e.egress_checked_at, e.clash_group, e.clash_node,
                           r.run_id, r.mode, r.session_mode, r.started_at
                    FROM collection_events e
                    JOIN collection_runs r ON r.run_id=e.run_id

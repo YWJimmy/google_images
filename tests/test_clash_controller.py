@@ -45,6 +45,15 @@ def test_manual_selector_switch_validates_live_choices():
         controller.switch("GLOBAL", "Unknown Node")
 
 
+def test_current_leaf_resolves_nested_strategy_groups():
+    proxies = {
+        "Auto": {"type": "URLTest", "now": "Fallback"},
+        "Fallback": {"type": "Fallback", "now": "Node A"},
+        "Node A": {"type": "Vmess"},
+    }
+    assert ClashController._resolve_current_leaf(proxies, "Auto") == "Node A"
+
+
 class ProbeController(ClashController):
     def __init__(self):
         super().__init__("http://127.0.0.1:9097", "test-secret")

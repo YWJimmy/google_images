@@ -24,6 +24,8 @@ REQUIRED_EVENT_FIELDS = {
     "proxy_status",
     "ip_event_status",
     "proxy_latency_ms",
+    "clash_group",
+    "clash_node",
 }
 
 

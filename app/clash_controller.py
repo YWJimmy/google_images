@@ -93,14 +93,31 @@ class ClashController:
             if not isinstance(value, dict) or value.get("type") != "Selector":
                 continue
             choices = [str(item) for item in value.get("all", []) if isinstance(item, str)]
+            current = str(value.get("now", ""))
             result.append(
                 {
                     "group": str(group_name),
-                    "current": str(value.get("now", "")),
+                    "current": current,
+                    "current_leaf": self._resolve_current_leaf(proxies, current),
                     "choices": choices,
                 }
             )
         return result
+
+    @staticmethod
+    def _resolve_current_leaf(proxies: dict, name: str) -> str:
+        current = name
+        visited: set[str] = set()
+        while current and current not in visited:
+            visited.add(current)
+            value = proxies.get(current)
+            if not isinstance(value, dict) or str(value.get("type", "")) not in GROUP_PROXY_TYPES:
+                return current
+            next_name = value.get("now")
+            if not isinstance(next_name, str) or not next_name:
+                return current
+            current = next_name
+        return current
 
     def switch(self, group: str, node: str) -> dict:
         group_name = group.strip()
@@ -215,7 +232,7 @@ class ClashController:
 def masked_proxy_egress(proxy_url: str) -> dict:
     proxy = validate_local_http_url(proxy_url, "proxy URL")
     opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
-    request = Request("https://api.ipify.org", headers={"User-Agent": "google-images-local-check/1"})
+    request = Request("https://api.ipify.org", headers={"User-Agent": "local-network-check/1"})
     started = time.perf_counter()
     try:
         with opener.open(request, timeout=6) as response:

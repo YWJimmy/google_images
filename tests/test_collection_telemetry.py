@@ -27,6 +27,8 @@ def test_verification_events_are_numbered_per_run_and_keep_masked_network_state(
             proxy_status="online",
             proxy_latency_ms=245,
             egress_checked_at="2026-08-15T22:00:00",
+            clash_group="Proxy",
+            clash_node="Node A",
         )
         second = telemetry.record_human_verification(
             run_id=run_id,
@@ -51,6 +53,8 @@ def test_verification_events_are_numbered_per_run_and_keep_masked_network_state(
         assert events[0]["proxy_status"] == "verification_seen"
         assert events[0]["ip_event_status"] == "verification_seen"
         assert events[0]["proxy_latency_ms"] == 245
+        assert events[1]["clash_group"] == "Proxy"
+        assert events[1]["clash_node"] == "Node A"
     finally:
         if path.exists():
             path.unlink()
