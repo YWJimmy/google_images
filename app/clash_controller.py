@@ -8,17 +8,22 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
-
+# 只允许访问本机回环地址上的 Clash/Mihomo Controller 或代理端口，避免控制请求误发往远程主机。
+# 127.0.0.1 和 ::1 分别是 IPv4/IPv6 回环地址；localhost 通常解析到其中之一。
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+# 这些类型表示“代理组”而非最终出口节点，解析当前出口或枚举叶子节点时需要继续向下展开。
 GROUP_PROXY_TYPES = {"Selector", "URLTest", "Fallback", "LoadBalance", "Relay"}
+# 这些类型不作为可测速的实际代理节点加入 leaf 列表，例如 Direct 表示直连、Reject 表示拒绝连接。
 NON_TESTABLE_PROXY_TYPES = {"Direct", "Reject", "RejectDrop", "Pass", "Compatible"}
+# 节点延迟检测使用返回 HTTP 204 的轻量 URL，Mihomo Controller 会通过指定节点发起测试。
 DEFAULT_DELAY_TEST_URL = "https://cp.cloudflare.com/generate_204"
 
 
+# 统一封装 Clash/Mihomo Controller 通信、返回格式或代理检测失败，便于上层集中处理。
 class ClashControllerError(RuntimeError):
     pass
 
-
+# 校验 Controller/代理 URL：必须是 http、主机必须为本机回环地址，并且必须显式提供端口。
 def validate_local_http_url(value: str, name: str) -> str:
     url = value.strip().rstrip("/")
     parts = urlsplit(url)
@@ -26,7 +31,7 @@ def validate_local_http_url(value: str, name: str) -> str:
         raise ValueError(f"{name} must be a local http URL with an explicit port")
     return url
 
-
+# 校验 Clash External Controller 的 API secret，拒绝空值、异常超长值和控制字符。
 def validate_secret(value: str) -> str:
     secret = value.strip()
     if not secret or len(secret) > 512 or any(ord(char) < 32 for char in secret):
@@ -34,6 +39,8 @@ def validate_secret(value: str) -> str:
     return secret
 
 
+# 对公网出口 IP 做脱敏显示：IPv4 隐去最后一段；IPv6 只保留前四组。
+# 该函数用于展示，不改变实际网络出口。
 def mask_ip(value: str) -> str:
     address = ipaddress.ip_address(value.strip())
     if address.version == 4:
@@ -42,18 +49,22 @@ def mask_ip(value: str) -> str:
     parts = address.exploded.split(":")
     return ":".join(parts[:4]) + ":…"
 
-
+# 把规范化 IP 做 SHA-256，并只保留前 16 个十六进制字符，得到用于“是否同一出口”比较的短指纹。
+# 这样可以比较出口变化而不在状态数据中直接保存完整 IP。
 def _ip_fingerprint(value: str) -> str:
     """Return a short non-reversible comparison token for an IP address."""
     normalized = str(ipaddress.ip_address(value.strip())).encode("ascii")
     return hashlib.sha256(normalized).hexdigest()[:16]
 
 
+# Clash/Mihomo External Controller 的最小客户端：读取代理状态、切换 Selector、关闭连接、测速节点。
 class ClashController:
+    # 初始化时立即校验 Controller 地址和 API secret，后续所有 API 请求复用这两个值。
     def __init__(self, endpoint: str, secret: str):
         self.endpoint = validate_local_http_url(endpoint, "controller endpoint")
         self.secret = validate_secret(secret)
-
+    # 统一发送 Controller HTTP 请求。payload 存在时编码为 JSON，并通过 Bearer Token 传递 API secret。
+    # Controller 的 HTTP 错误与连接/超时/JSON 解析错误会转换为 ClashControllerError。
     def _request(
         self,
         path: str,
@@ -79,7 +90,7 @@ class ClashController:
             raise ClashControllerError(f"Clash controller returned HTTP {exc.code}") from None
         except (URLError, TimeoutError, OSError, json.JSONDecodeError):
             raise ClashControllerError("Clash controller connection failed") from None
-
+    # 读取 /version 和当前 Selector 列表，返回供控制台展示的 Controller 在线状态摘要。
     def status(self) -> dict:
         version = self._request("/version")
         selectors = self.selectors()
@@ -88,7 +99,8 @@ class ClashController:
             "version": str(version.get("version", "unknown"))[:80],
             "selectors": selectors,
         }
-
+    # 读取 /proxies，只提取 type=Selector 的代理组。
+    # 同时返回当前直接选项 current，以及沿嵌套代理组继续解析得到的最终叶子节点 current_leaf。
     def selectors(self) -> list[dict]:
         state = self._request("/proxies")
         proxies = state.get("proxies", {})
@@ -109,8 +121,8 @@ class ClashController:
                 }
             )
         return result
-
     @staticmethod
+    # 沿代理组的 now 字段逐层向下解析最终节点；visited 用于防止异常配置形成循环引用后无限循环。
     def _resolve_current_leaf(proxies: dict, name: str) -> str:
         current = name
         visited: set[str] = set()
@@ -124,7 +136,8 @@ class ClashController:
                 return current
             current = next_name
         return current
-
+    # 切换某个 Selector 当前选择的节点。
+    # 先确认代理组存在且目标节点确实属于该组，再向 /proxies/{group} 发送 PUT {'name': node}。
     def switch(self, group: str, node: str) -> dict:
         group_name = group.strip()
         node_name = node.strip()
@@ -135,26 +148,26 @@ class ClashController:
             raise ValueError("node is not a current choice of this Selector group")
         self._request(f"/proxies/{quote(group_name, safe='')}", "PUT", {"name": node_name})
         return {"ok": True, "group": group_name, "current": node_name}
-
+    # 删除 Mihomo 当前活动连接，使后续新连接立即按刚切换的路由重新建立；它本身不负责选择节点。
     def close_connections(self) -> dict:
         """Close Mihomo's active connections so new requests use the selected route."""
         self._request("/connections", "DELETE")
         return {"ok": True}
-
+    # 取得 /proxies 的完整代理字典，并过滤掉非字典项，供节点展开和测速流程复用。
     def _proxy_state(self) -> dict[str, dict]:
         state = self._request("/proxies")
         proxies = state.get("proxies", {})
         if not isinstance(proxies, dict):
             raise ClashControllerError("Clash controller returned an invalid proxy list")
         return {str(name): value for name, value in proxies.items() if isinstance(value, dict)}
-
     @staticmethod
+    # 递归展开指定 Selector 下的嵌套代理组，收集真正可进行延迟测试的叶子代理节点。
+    # visited 同样用于防止循环；Direct/Reject 等非测试类型不会进入结果。
     def _leaf_nodes(proxies: dict[str, dict], group: str) -> list[str]:
         if group not in proxies or str(proxies[group].get("type", "")) != "Selector":
             raise ValueError("unknown Selector group")
         leaves: list[str] = []
         visited: set[str] = set()
-
         def visit(name: str) -> None:
             if name in visited:
                 return
@@ -168,12 +181,12 @@ class ClashController:
                 return
             if proxy_type and proxy_type not in NON_TESTABLE_PROXY_TYPES:
                 leaves.append(name)
-
         for choice in proxies[group].get("all", []):
             if isinstance(choice, str):
                 visit(choice)
         return leaves
-
+    # 调用 Mihomo 的 /proxies/{node}/delay 接口测试单个节点到 DEFAULT_DELAY_TEST_URL 的延迟。
+    # 返回值必须是合理的正整数毫秒数，否则视为测试失败。
     def _delay_for_node(self, name: str, timeout_ms: int) -> int:
         query = urlencode(
             {"url": DEFAULT_DELAY_TEST_URL, "timeout": timeout_ms, "expected": "204"}
@@ -186,7 +199,8 @@ class ClashController:
         if not isinstance(delay, int) or delay <= 0 or delay >= 65535:
             raise ClashControllerError("proxy delay check failed")
         return delay
-
+    # 批量测试一个 Selector 中所有可测试叶子节点，但不修改当前选中的节点。
+    # 最多使用 8 个线程并发测速；结果按“可用优先、延迟升序、名称”排序。
     def probe_group_nodes(
         self, group: str, *, timeout_ms: int = 3000, max_nodes: int = 200
     ) -> dict:
@@ -239,7 +253,8 @@ class ClashController:
             "nodes": ordered,
         }
 
-
+# 通过指定的本机 HTTP 代理访问 api.ipify.org，确认该代理实际看到的公网出口身份。
+# 返回脱敏 IP、不可逆短指纹和检测耗时；完整 IP 不放入返回结构。
 def proxy_egress_identity(proxy_url: str) -> dict:
     """Check proxy egress without returning or persisting the full IP address."""
     proxy = validate_local_http_url(proxy_url, "proxy URL")
@@ -260,7 +275,7 @@ def proxy_egress_identity(proxy_url: str) -> dict:
     except (HTTPError, URLError, TimeoutError, OSError, ValueError):
         raise ClashControllerError("proxy egress check failed") from None
 
-
+# 在 proxy_egress_identity 基础上进一步移除 IP 指纹，只保留适合界面展示的脱敏出口信息。
 def masked_proxy_egress(proxy_url: str) -> dict:
     sample = proxy_egress_identity(proxy_url)
     sample.pop("ip_fingerprint", None)
