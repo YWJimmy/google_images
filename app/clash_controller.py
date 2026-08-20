@@ -324,3 +324,156 @@ def masked_proxy_egress(proxy_url: str) -> dict:
     sample = proxy_egress_identity(proxy_url)  # 先执行完整出口身份检测。
     sample.pop("ip_fingerprint", None)  # 展示版本主动删除 IP 指纹，只保留脱敏信息。
     return sample  # 返回适合界面展示的代理出口状态。
+
+
+# ===========================
+# v2.1 IP自动切换增强说明
+# ===========================
+# 以下扩展方法用于解决：
+# 1. Clash节点名称包含 emoji/中文导致切换失败
+# 2. Selector/URLTest/Fallback 与真实出口节点混淆
+# 3. 切换后无法确认 Clash 是否真正生效
+#
+# 使用原则：
+# - 永远保存 Clash API 返回的原始节点名称
+# - 不使用自行生成的显示名称作为 PUT 参数
+# - 切换后必须验证 Selector 的 now 字段
+
+
+def get_proxy_detail_v21(self, proxy_name: str) -> dict:
+    """
+    v2.1新增：
+    获取单个代理节点详细信息。
+
+    例如返回：
+    {
+        "name": "🇯🇵 日本 JP1",
+        "type": "AnyTLS"
+    }
+
+    注意：
+    proxy_name 必须使用 Clash 返回的完整名称。
+    """
+    return self._request(
+        f"/proxies/{quote(proxy_name, safe='')}"
+    )
+
+
+def get_real_nodes_v21(self, group: str = "GLOBAL") -> list[dict]:
+    """
+    v2.1新增：
+    从 Selector 中筛选真实出口节点。
+
+    返回:
+    [
+        {
+            "clash_name": "🇯🇵 日本 JP1",
+            "type": "AnyTLS"
+        }
+    ]
+
+    不修改原有 get_real_nodes，避免影响旧代码。
+    """
+    state = self._proxy_state()
+
+    selector = state.get(group)
+
+    if not selector:
+        raise ValueError("unknown Selector group")
+
+    result = []
+
+    for name in selector.get("all", []):
+
+        if not isinstance(name, str):
+            continue
+
+        try:
+            detail = self.get_proxy_detail_v21(name)
+
+        except Exception:
+            continue
+
+        proxy_type = str(
+            detail.get("type", "")
+        )
+
+        # 代理组不是最终出口
+        if proxy_type in GROUP_PROXY_TYPES:
+            continue
+
+        # 直连/拒绝不是出口节点
+        if proxy_type in NON_TESTABLE_PROXY_TYPES:
+            continue
+
+        result.append(
+            {
+                "clash_name": name,
+                "type": proxy_type,
+            }
+        )
+
+    return result
+
+
+def get_current_node_v21(
+    self,
+    group: str = "GLOBAL"
+) -> str:
+
+    """
+    v2.1新增：
+    获取Selector当前真实选择名称。
+    """
+    data = self._request(
+        f"/proxies/{quote(group, safe='')}"
+    )
+
+    return str(
+        data.get("now", "")
+    )
+
+
+def switch_and_verify_v21(
+    self,
+    group: str,
+    node: str,
+    wait: float = 1.5,
+) -> dict:
+
+    """
+    v2.1新增：
+    切换节点并确认 Clash 已接受。
+
+    返回：
+    {
+        "ok": True,
+        "current": "节点名称"
+    }
+    """
+
+    self.switch(
+        group,
+        node
+    )
+
+    time.sleep(wait)
+
+    current = self.get_current_node_v21(
+        group
+    )
+
+    return {
+        "ok": current == node,
+        "requested": node,
+        "current": current,
+    }
+
+
+# 将新增方法绑定到原 ClashController 类。
+# 这样无需破坏原项目结构，旧调用继续使用原方法，
+# 新版 current_chrome_ip.py 可以调用 *_v21 方法。
+ClashController.get_proxy_detail_v21 = get_proxy_detail_v21
+ClashController.get_real_nodes_v21 = get_real_nodes_v21
+ClashController.get_current_node_v21 = get_current_node_v21
+ClashController.switch_and_verify_v21 = switch_and_verify_v21
