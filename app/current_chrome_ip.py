@@ -1,226 +1,182 @@
+"""
+current_chrome_ip.py v2.1
+
+功能：
+1. 调用 ClashController v2.1 获取真实出口节点
+2. 使用 Clash 返回的完整节点名称进行切换
+3. 验证 Selector 是否真正切换成功
+4. 通过 Clash 代理端口检测公网出口 IP
+
+说明：
+- 不修改原有搜索逻辑
+- 作为独立 IP 切换测试入口
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import time
-from pathlib import Path
-from typing import Callable
 
-from .clash_controller import (
+from app.clash_controller import (
     ClashController,
-    ClashControllerError,
     proxy_egress_identity,
 )
 
 
-# 不参与真实出口切换的策略名称
-NON_LEAF_NAMES = {
-    "DIRECT",
-    "REJECT",
-    "自动选择",
-    "故障转移",
-    "故障转移",
-}
+def masked(value: str | None):
+    """隐藏IP后两段，方便日志显示"""
+    if not value:
+        return None
+    parts = value.split(".")
+    if len(parts) == 4:
+        return ".".join(parts[:3]) + ".xxx"
+    return value
 
 
-class CurrentChromeIpRotator:
-    """
-    v2:
-    Chrome固定代理出口IP轮换器。
-
-    改进:
-    1. 不再简单遍历 Selector choices
-    2. 支持 GLOBAL 中嵌套策略组
-    3. 过滤策略组和无效节点
-    4. 输出详细失败原因
-    """
-
-    def __init__(
-        self,
-        controller: ClashController,
-        proxy_url: str,
-        *,
-        egress_check: Callable[[str], dict] = proxy_egress_identity,
-        sleep: Callable[[float], None] = time.sleep,
-    ):
-        self.controller = controller
-        self.proxy_url = proxy_url
-        self.egress_check = egress_check
-        self.sleep = sleep
-
-    def _candidate_nodes(self, group: str) -> list[str]:
-        """
-        获取真实可切换节点。
-        不直接使用 Selector 的 all，
-        而使用 ClashController 展开的叶子节点测速结果。
-        """
-        probe = self.controller.probe_group_nodes(
-            group,
-            timeout_ms=3000,
-            max_nodes=500,
-        )
-
-        result = []
-        for item in probe.get("nodes", []):
-            name = str(item.get("name", ""))
-            if not name:
-                continue
-            if name in NON_LEAF_NAMES:
-                continue
-            if not item.get("usable"):
-                continue
-            result.append(name)
-
-        return result
-
-    def rotate(
-        self,
-        group: str,
-        *,
-        settle_seconds: float = 2,
-        max_candidates: int = 20,
-    ) -> dict:
-
-        selectors = {
-            item["group"]: item
-            for item in self.controller.selectors()
-        }
-
-        if group not in selectors:
-            return {
-                "ok": False,
-                "error_code": "GROUP_NOT_FOUND",
-                "group": group,
-            }
-
-        selector = selectors[group]
-
-        before = self.egress_check(self.proxy_url)
-        before_fp = str(before.get("ip_fingerprint", ""))
-
-        if not before_fp:
-            return {
-                "ok": False,
-                "error_code": "IP_CHECK_FAILED",
-            }
-
-        original = selector.get("current_leaf") or selector.get("current")
-
-        candidates = [
-            x for x in self._candidate_nodes(group)
-            if x != original
-        ][:max_candidates]
-
-        if not candidates:
-            return {
-                "ok": False,
-                "error_code": "NO_USABLE_NODE",
-                "group": group,
-            }
-
-        attempts = []
-
-        for node in candidates:
-            attempt = {
-                "node": node,
-            }
-
-            try:
-                self.controller.switch(group, node)
-                self.controller.close_connections()
-                self.sleep(settle_seconds)
-
-                after = self.egress_check(self.proxy_url)
-
-                changed = (
-                    str(after.get("ip_fingerprint", ""))
-                    != before_fp
-                )
-
-                attempt.update({
-                    "changed": changed,
-                    "masked_ip": after.get("masked_ip"),
-                    "latency_ms": after.get("latency_ms"),
-                })
-
-                attempts.append(attempt)
-
-                if changed:
-                    return {
-                        "ok": True,
-                        "group": group,
-                        "previous_node": original,
-                        "current_node": node,
-                        "previous_masked_ip":
-                            before.get("masked_ip"),
-                        "current_masked_ip":
-                            after.get("masked_ip"),
-                        "attempts": attempts,
-                        "connections_reset": True,
-                    }
-
-            except Exception as exc:
-                attempt.update({
-                    "changed": False,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                })
-                attempts.append(attempt)
-
-        return {
-            "ok": False,
-            "error_code": "NO_IP_CHANGE",
-            "group": group,
-            "attempts": attempts,
-        }
-
-
-def build_parser():
+def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--group", default="GLOBAL")
-    parser.add_argument("--max-candidates", type=int, default=20)
-    return parser
-
-
-def main(argv=None):
-    from .secret_store import DashboardSecretStore
-
-    args = build_parser().parse_args(argv)
-
-    root = Path.cwd().resolve()
-
-    store = DashboardSecretStore(
-        root / "private" / "dashboard_secrets.json"
+    parser.add_argument(
+        "--group",
+        default="GLOBAL",
+        help="Clash Selector group name"
+    )
+    parser.add_argument(
+        "--proxy",
+        default="http://127.0.0.1:7897",
+        help="Clash proxy url"
+    )
+    parser.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:9097",
+        help="Clash API endpoint"
+    )
+    parser.add_argument(
+        "--secret",
+        default="set-your-secret",
+        help="Clash API secret"
     )
 
-    settings = store.public_settings()
+    args = parser.parse_args()
 
     controller = ClashController(
-        settings["clash_endpoint"],
-        store.clash_secret(),
+        args.endpoint,
+        args.secret
     )
 
-    rotator = CurrentChromeIpRotator(
-        controller,
-        settings["clash_proxy_url"],
+    result = {
+        "ok": False,
+        "group": args.group,
+        "attempts": []
+    }
+
+    previous_node = controller.get_current_node_v21(
+        args.group
     )
 
-    result = rotator.rotate(
-        args.group,
-        max_candidates=args.max_candidates,
+    previous_ip = proxy_egress_identity(
+        args.proxy
     )
+
+    result["previous_node"] = previous_node
+    result["previous_ip"] = (
+        previous_ip.get("masked_ip")
+        if previous_ip.get("ok")
+        else None
+    )
+
+    nodes = controller.get_real_nodes_v21(
+        args.group
+    )
+
+    for node in nodes:
+
+        clash_name = node["clash_name"]
+
+        attempt = {
+            "node": clash_name,
+            "type": node.get("type")
+        }
+
+        try:
+
+            switched = controller.switch_and_verify_v21(
+                args.group,
+                clash_name
+            )
+
+            if not switched.get("ok"):
+                attempt["reason"] = "switch_not_confirmed"
+                result["attempts"].append(attempt)
+                continue
+
+
+            time.sleep(1)
+
+
+            current_ip = proxy_egress_identity(
+                args.proxy
+            )
+
+            attempt["masked_ip"] = (
+                current_ip.get("masked_ip")
+                if current_ip.get("ok")
+                else None
+            )
+
+            result["attempts"].append(attempt)
+
+
+            old_fp = previous_ip.get(
+                "ip_fingerprint"
+            )
+
+            new_fp = current_ip.get(
+                "ip_fingerprint"
+            )
+
+
+            if (
+                current_ip.get("ok")
+                and new_fp != old_fp
+            ):
+
+                result.update(
+                    {
+                        "ok": True,
+                        "current_node": clash_name,
+                        "current_ip":
+                            current_ip.get(
+                                "masked_ip"
+                            )
+                    }
+                )
+
+                print(
+                    json.dumps(
+                        result,
+                        ensure_ascii=False,
+                        indent=2
+                    )
+                )
+                return
+
+
+        except Exception as e:
+            attempt["reason"] = str(e)
+            result["attempts"].append(attempt)
+
+
+    result["error_code"] = "NO_IP_CHANGE"
 
     print(
         json.dumps(
             result,
             ensure_ascii=False,
-            indent=2,
+            indent=2
         )
     )
 
-    return 0 if result.get("ok") else 2
-
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
