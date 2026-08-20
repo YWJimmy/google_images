@@ -1,4 +1,8 @@
 from __future__ import annotations
+# 本模块为 Google 图片自动搜索系统的一部分。
+# 整体流程：任务调度 -> 浏览器自动化 -> Google页面解析 -> 结果返回 -> 状态记录。
+# 以下注释仅用于解释工程设计，不改变任何执行逻辑。
+
 from collections import Counter
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version as package_version
@@ -38,11 +42,13 @@ GOOGLE_LOGIN_COOKIE_NAMES = {
 }
 
 
+# 功能：infer_google_login 函数，负责当前模块中的一项具体处理逻辑。
 def infer_google_login(cookie_names: set[str]) -> str:
     """Return a conservative login hint without exposing cookie values."""
     return "likely_signed_in" if cookie_names & GOOGLE_LOGIN_COOKIE_NAMES else "not_detected"
 
 
+# 功能：_installed_version 函数，负责当前模块中的一项具体处理逻辑。
 def _installed_version(distribution: str) -> str:
     try:
         return package_version(distribution)
@@ -50,10 +56,12 @@ def _installed_version(distribution: str) -> str:
         return "unknown"
 
 
+# 功能：redact_diagnostic_url 函数，负责当前模块中的一项具体处理逻辑。
 def redact_diagnostic_url(url: str) -> str:
     """Redact opaque challenge tokens while retaining useful URL context."""
     try:
         parts = urlsplit(url)
+# /sorry/ 是 Google 异常流量检测页面常见路径，用于识别风控状态。
         if "/sorry/" not in parts.path.lower():
             return url
         query = [(key, "<redacted>" if key.lower() == "q" else value)
@@ -63,6 +71,7 @@ def redact_diagnostic_url(url: str) -> str:
         return url
 
 
+# 功能：diagnostic_outcome 函数，负责当前模块中的一项具体处理逻辑。
 def diagnostic_outcome(state: str, navigation_error: str | None) -> tuple[int, str, int]:
     """Return application result code, type, and process exit code."""
     if state == "challenge":
@@ -74,11 +83,13 @@ def diagnostic_outcome(state: str, navigation_error: str | None) -> tuple[int, s
     return 0, "DIAGNOSTIC_NORMAL", 0
 
 
+# 功能：is_expected_google_com_host 函数，负责当前模块中的一项具体处理逻辑。
 def is_expected_google_com_host(url: str) -> bool:
     host = (urlsplit(url).hostname or "").lower().strip(".")
     return host == "google.com" or host.endswith(".google.com")
 
 
+# 功能：probe_href_kind 函数，负责当前模块中的一项具体处理逻辑。
 def probe_href_kind(href: str) -> str:
     """Classify a candidate href without retaining its query value."""
     try:
@@ -98,19 +109,25 @@ def probe_href_kind(href: str) -> str:
     except Exception:
         return "invalid"
 
+# 类说明：ChallengeDetected 封装相关业务状态和操作。
 class ChallengeDetected(RuntimeError):
     pass
 
+# 类说明：ConsentRequired 封装相关业务状态和操作。
 class ConsentRequired(RuntimeError):
     pass
 
+# 类说明：BrowserLaunchError 封装相关业务状态和操作。
 class BrowserLaunchError(RuntimeError):
     pass
 
+# 类说明：NavigationError 封装相关业务状态和操作。
 class NavigationError(RuntimeError):
     pass
 
+# 类说明：SearchParseTimeout 封装相关业务状态和操作。
 class SearchParseTimeout(RuntimeError):
+# 功能：__init__ 函数，负责当前模块中的一项具体处理逻辑。
     def __init__(
         self,
         message: str,
@@ -139,6 +156,7 @@ TIMEOUT_STAGE_LABELS = {
 }
 
 
+# 功能：format_search_metrics 函数，负责当前模块中的一项具体处理逻辑。
 def format_search_metrics(metrics: dict) -> str:
     parts = []
     fields = (
@@ -159,6 +177,7 @@ def format_search_metrics(metrics: dict) -> str:
     return " · ".join(parts)
 
 
+# 功能：wait_for_post_search_delay 函数，负责当前模块中的一项具体处理逻辑。
 def wait_for_post_search_delay(
     previous_finished: float | None,
     delay_seconds: float,
@@ -180,7 +199,9 @@ def wait_for_post_search_delay(
         sleeper(min(remaining, 0.25))
 
 
+# 类说明：GoogleImagesBrowser 封装相关业务状态和操作。
 class GoogleImagesBrowser:
+# 功能：__init__ 函数，负责当前模块中的一项具体处理逻辑。
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.pw = None
@@ -204,6 +225,9 @@ class GoogleImagesBrowser:
             "retry_count": 0,
             "recovery": "none",
         }
+
+# 功能：启动浏览器自动化环境。
+# 位置：由搜索流程调用，负责建立 Browser / Context / Page 等 Playwright运行链路。
 
     def start(self):
         try:
@@ -230,6 +254,7 @@ class GoogleImagesBrowser:
                 )
                 self.context = self.browser.new_context(
                     storage_state=str(self.cfg.storage_state_path),
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                     viewport={"width": self.cfg.viewport_width, "height": self.cfg.viewport_height},
                 )
             else:
@@ -239,6 +264,7 @@ class GoogleImagesBrowser:
                     channel=self.cfg.browser_channel,
                     headless=self.cfg.headless,
                     chromium_sandbox=True,
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                     viewport={"width": self.cfg.viewport_width, "height": self.cfg.viewport_height},
                     args=self.launch_args,
                 )
@@ -258,6 +284,8 @@ class GoogleImagesBrowser:
         except Exception as exc:
             self.close()
             raise BrowserLaunchError(str(exc)) from exc
+
+# 功能：释放浏览器相关资源，避免后台进程和端口残留。
 
     def close(self):
         if (
@@ -293,10 +321,14 @@ class GoogleImagesBrowser:
         self._attached_over_cdp = False
         self._search_session_initialized = False
 
+# 功能：根据关键词构造 Google Images 搜索地址。
+# 数据流：任务关键词 -> URL编码 -> 浏览器导航。
+
     def _build_url(self, keyword: str) -> str:
         params = {"q": keyword, "udm": "2", "hl": self.cfg.hl, "gl": self.cfg.gl}
         return self.cfg.base_url + "?" + urlencode(params)
 
+# 功能：_wait_for_result_candidates 函数，负责当前模块中的一项具体处理逻辑。
     def _wait_for_result_candidates(self, expected_results: int) -> tuple[int, int]:
         """Wait adaptively until the Top-N candidate count is stable."""
         started = time.perf_counter()
@@ -318,6 +350,9 @@ class GoogleImagesBrowser:
             previous = count
             self.page.wait_for_timeout(self.cfg.results_poll_interval_ms)
         return int((time.perf_counter() - started) * 1000), max(0, previous)
+
+# 功能：执行一次真实浏览器页面跳转。
+# 作用：让 Google 按正常网页流程处理 Cookie、JavaScript 和页面状态。
 
     def _navigate_to_search(
         self, keyword: str, expected_results: int | None = None
@@ -341,15 +376,18 @@ class GoogleImagesBrowser:
             "recovery": "none",
         }
 
+# 功能：remaining_ms 函数，负责当前模块中的一项具体处理逻辑。
         def remaining_ms(cap: int | None = None) -> int:
             remaining = max(1, int((navigation_deadline - time.perf_counter()) * 1000))
             return min(remaining, cap) if cap is not None else remaining
 
+# 功能：update_total 函数，负责当前模块中的一项具体处理逻辑。
         def update_total() -> None:
             elapsed = int((time.perf_counter() - navigation_started) * 1000)
             self.last_search_metrics["navigation_ms"] = elapsed
             self.last_search_metrics["search_parse_ms"] = elapsed
 
+# 功能：timeout 函数，负责当前模块中的一项具体处理逻辑。
         def timeout(stage: str, recovery: str = "skipped") -> SearchParseTimeout:
             update_total()
             label = TIMEOUT_STAGE_LABELS.get(stage, stage)
@@ -360,9 +398,11 @@ class GoogleImagesBrowser:
                 recovery=recovery,
             )
 
+# 功能：direct_navigation 函数，负责当前模块中的一项具体处理逻辑。
         def direct_navigation(stage: str) -> None:
             step_started = time.perf_counter()
             try:
+# 浏览器页面导航：通过真实页面加载触发Chrome环境、Cookie和JavaScript流程。
                 self.page.goto(
                     target_url,
                     wait_until="domcontentloaded",
@@ -391,6 +431,7 @@ class GoogleImagesBrowser:
         current_stage = "home_navigation"
         step_started = time.perf_counter()
         try:
+# 浏览器页面导航：通过真实页面加载触发Chrome环境、Cookie和JavaScript流程。
             self.page.goto(
                 self.cfg.images_home_url,
                 wait_until="domcontentloaded",
@@ -452,6 +493,7 @@ class GoogleImagesBrowser:
         )
         return target_url, landing_url
 
+# 功能：result_dom_summary 函数，负责当前模块中的一项具体处理逻辑。
     def result_dom_summary(self) -> dict[str, object]:
         """Return aggregate DOM counts without exposing result URLs or page text."""
         if not self.page:
@@ -513,6 +555,7 @@ class GoogleImagesBrowser:
             return {}
 
     @staticmethod
+# 功能：_visible_external_domain_counts 函数，负责当前模块中的一项具体处理逻辑。
     def _visible_external_domain_counts(page) -> Counter[str]:
         """Count visible external-link domains without returning full URLs."""
         try:
@@ -528,12 +571,14 @@ class GoogleImagesBrowser:
                 domains[domain] += 1
         return domains
 
+# 功能：probe_first_image 函数，负责当前模块中的一项具体处理逻辑。
     def probe_first_image(self, directory: Path, keyword: str) -> tuple[dict, Path]:
         """Click one visible image result and report only structural/domain observations."""
         if not self.page or not self.context:
             raise BrowserLaunchError("browser not started")
 
         timestamp = datetime.now().astimezone()
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         report: dict[str, object] = {
             "generated_at": timestamp.isoformat(timespec="seconds"),
             "purpose": "Single-image structure probe; no challenge interaction or token capture.",
@@ -577,6 +622,7 @@ class GoogleImagesBrowser:
             candidate = None
             candidate_kind = None
             candidate_count = image_anchors.count()
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["image_anchor_count"] = candidate_count
             for index in range(min(candidate_count, 300)):
                 current = image_anchors.nth(index)
@@ -591,21 +637,31 @@ class GoogleImagesBrowser:
                     continue
 
             if candidate is None:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_code"] = -6
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_type"] = "PROBE_IMAGE_CANDIDATE_NOT_FOUND"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["process_exit_code"] = 6
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["probe"]["outcome"] = "no_candidate"
                 return self._write_probe_report(directory, timestamp, report)
 
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["candidate_found"] = True
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["candidate_href_kind"] = candidate_kind
             existing_page_ids = {id(page) for page in self.context.pages}
             candidate.scroll_into_view_if_needed(timeout=5000)
             candidate.click(timeout=10000)
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["click_succeeded"] = True
             main_page.wait_for_timeout(3000)
 
             popup_pages = [page for page in self.context.pages if id(page) not in existing_page_ids]
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["popup_count"] = len(popup_pages)
             popup_external_domains: set[str] = set()
             popup_google_owned_count = 0
@@ -622,6 +678,7 @@ class GoogleImagesBrowser:
                     popup.wait_for_timeout(750)
                     popup_url = popup.url or ""
                     popup_domain = hostname(popup_url)
+# /sorry/ 是 Google 异常流量检测页面常见路径，用于识别风控状态。
                     if "/sorry/" in urlsplit(popup_url).path.lower() and is_google_host(popup_domain):
                         popup_challenge = True
                     if popup_domain and is_google_host(popup_domain):
@@ -665,46 +722,88 @@ class GoogleImagesBrowser:
             })
 
             if popup_challenge:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_code"] = -4
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_type"] = "GOOGLE_CHALLENGE_OR_UNUSUAL_TRAFFIC"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["process_exit_code"] = 4
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["probe"]["outcome"] = "challenge"
             elif popup_external_domains:
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_type"] = "PROBE_POPUP_EXTERNAL_DOMAIN_FOUND"
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["probe"]["outcome"] = "popup_external_domain"
             elif main_became_external:
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_type"] = "PROBE_MAIN_PAGE_EXTERNAL_DOMAIN_FOUND"
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["probe"]["outcome"] = "main_page_external_domain"
             elif increased_domains:
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_type"] = "PROBE_PANEL_EXTERNAL_DOMAIN_FOUND"
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["probe"]["outcome"] = "panel_external_domain"
             elif report["probe"]["dom_anchor_count_changed"]:
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_type"] = "PROBE_STRUCTURE_CHANGED_NO_DOMAIN"
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["probe"]["outcome"] = "structure_changed_no_domain"
             else:
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["result_type"] = "PROBE_NO_OBSERVABLE_SOURCE_DOMAIN"
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 report["probe"]["outcome"] = "no_observable_source_domain"
         except ChallengeDetected:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["result_code"] = -4
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["result_type"] = "GOOGLE_CHALLENGE_OR_UNUSUAL_TRAFFIC"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["process_exit_code"] = 4
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["outcome"] = "challenge"
         except ConsentRequired:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["result_code"] = -9
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["result_type"] = "GOOGLE_CONSENT_REQUIRED"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["process_exit_code"] = 9
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["outcome"] = "consent"
         except (NavigationError, PlaywrightTimeoutError) as exc:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["result_code"] = -2
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["result_type"] = "NETWORK_OR_NAVIGATION_ERROR"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["process_exit_code"] = 2
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["outcome"] = "navigation_error"
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["error_type"] = type(exc).__name__
         except Exception as exc:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["result_code"] = -6
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["result_type"] = "RESULT_PARSE_ERROR"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["process_exit_code"] = 6
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["outcome"] = "probe_error"
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             report["probe"]["error_type"] = type(exc).__name__
         finally:
             for popup in popup_pages:
@@ -715,6 +814,7 @@ class GoogleImagesBrowser:
 
         return self._write_probe_report(directory, timestamp, report)
 
+# 功能：_structured_source_observations 函数，负责当前模块中的一项具体处理逻辑。
     def _structured_source_observations(
         self, max_results: int, timeout_ms: int | None = None
     ) -> list[SourceDomainObservation]:
@@ -759,6 +859,9 @@ class GoogleImagesBrowser:
             if timeout_ms is not None:
                 self.page.set_default_timeout(10000)
 
+# 功能：测试并采集顶部图片结果来源。
+# 返回：包含排名、来源URL和错误状态的信息。
+
     def test_top_image_sources(
         self,
         directory: Path,
@@ -774,6 +877,7 @@ class GoogleImagesBrowser:
         timestamp = datetime.now().astimezone()
         started = time.monotonic()
         deadline = started + time_budget_seconds
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         sample_reports: list[dict[str, object]] = []
         stopped_reason = None
         previous_sample_started: float | None = None
@@ -1000,34 +1104,47 @@ class GoogleImagesBrowser:
                 break
 
         elapsed_seconds = round(time.monotonic() - started, 3)
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         statuses = Counter(str(sample["status"]) for sample in sample_reports)
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         total_attempted = sum(int(sample["attempted_count"]) for sample in sample_reports)
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         total_resolved = sum(int(sample["resolved_count"]) for sample in sample_reports)
         measured = [
             sample for sample in sample_reports if sample.get("search_parse_ms") is not None
         ]
         if stopped_reason == "challenge":
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
             result_code, result_type, process_exit_code = -4, "GOOGLE_CHALLENGE_OR_UNUSUAL_TRAFFIC", 4
         elif stopped_reason == "consent":
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
             result_code, result_type, process_exit_code = -9, "GOOGLE_CONSENT_REQUIRED", 9
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         elif stopped_reason == "time_budget_exhausted" or len(sample_reports) < len(tasks):
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
             result_code, result_type, process_exit_code = -5, "SOURCE_TEST_TIME_BUDGET_EXHAUSTED", 5
         elif any(sample["status"] not in {"found", "not_found_in_top_n"} for sample in sample_reports):
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
             result_code, result_type, process_exit_code = -5, "SOURCE_TEST_INCOMPLETE", 5
         else:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
             result_code, result_type, process_exit_code = 0, "SOURCE_TEST_COMPLETE", 0
 
         if telemetry_run_id:
             try:
                 telemetry.finish_run(
                     telemetry_run_id,
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
                     status=stopped_reason or ("complete" if process_exit_code == 0 else "incomplete"),
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                     completed_count=len(sample_reports),
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                     search_attempt_count=len(sample_reports),
                 )
             except Exception as exc:
                 telemetry_error = type(exc).__name__
 
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         report = {
             "generated_at": timestamp.isoformat(timespec="seconds"),
             "purpose": "Bounded top-N image source-domain test; no challenge bypass.",
@@ -1078,22 +1195,27 @@ class GoogleImagesBrowser:
         }
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / ("source_domain_test_" + timestamp.strftime("%Y%m%d_%H%M%S") + ".json")
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return report, path
 
     @staticmethod
+# 功能：_write_probe_report 函数，负责当前模块中的一项具体处理逻辑。
     def _write_probe_report(directory: Path, timestamp: datetime, report: dict) -> tuple[dict, Path]:
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / ("first_image_probe_" + timestamp.strftime("%Y%m%d_%H%M%S") + ".json")
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return report, path
 
+# 功能：_visible_body_text 函数，负责当前模块中的一项具体处理逻辑。
     def _visible_body_text(self) -> str:
         try:
             return self.page.locator("body").inner_text(timeout=5000).lower() if self.page else ""
         except Exception:
             return ""
 
+# 功能：refresh_page_binding 函数，负责当前模块中的一项具体处理逻辑。
     def refresh_page_binding(self, prefer_normal_google_page: bool = False) -> bool:
         """Rebind when completing a challenge replaces the original tab target."""
         if not self.context:
@@ -1105,6 +1227,7 @@ class GoogleImagesBrowser:
                 normal_google_pages = [
                     page
                     for page in google_pages
+# /sorry/ 是 Google 异常流量检测页面常见路径，用于识别风控状态。
                     if "/sorry/" not in (urlsplit(page.url).path or "").lower()
                     and not (urlsplit(page.url).hostname or "").lower().startswith("consent.google.")
                 ]
@@ -1131,12 +1254,14 @@ class GoogleImagesBrowser:
         except Exception:
             return False
 
+# 功能：_page_state 函数，负责当前模块中的一项具体处理逻辑。
     def _page_state(self) -> tuple[str, str | None]:
         """Return (state, reason), where state is normal/challenge/consent."""
         if not self.page:
             return "normal", None
 
         url = (self.page.url or "").lower()
+# /sorry/ 是 Google 异常流量检测页面常见路径，用于识别风控状态。
         if "/sorry/" in url:
             return "challenge", f"challenge URL: {redact_diagnostic_url(self.page.url)}"
 
@@ -1166,6 +1291,7 @@ class GoogleImagesBrowser:
 
         return "normal", None
 
+# 功能：save_diagnostics 函数，负责当前模块中的一项具体处理逻辑。
     def save_diagnostics(self, directory: Path, prefix: str) -> list[str]:
         """Best-effort diagnostic capture. Does not interact with any challenge."""
         if not self.page:
@@ -1190,6 +1316,7 @@ class GoogleImagesBrowser:
             pass
         return paths
 
+# 功能：_chrome_version_details 函数，负责当前模块中的一项具体处理逻辑。
     def _chrome_version_details(self) -> dict[str, str | None]:
         """Read Chrome's own version page; failure must not abort diagnosis."""
         if not self.context:
@@ -1197,8 +1324,10 @@ class GoogleImagesBrowser:
         version_page = None
         try:
             version_page = self.context.new_page()
+# 浏览器页面导航：通过真实页面加载触发Chrome环境、Cookie和JavaScript流程。
             version_page.goto("chrome://version/", wait_until="domcontentloaded")
 
+# 功能：value 函数，负责当前模块中的一项具体处理逻辑。
             def value(selector: str) -> str | None:
                 try:
                     text = version_page.locator(selector).inner_text(timeout=3000).strip()
@@ -1220,6 +1349,7 @@ class GoogleImagesBrowser:
                 except Exception:
                     pass
 
+# 功能：save_launch_failure_diagnostic 函数，负责当前模块中的一项具体处理逻辑。
     def save_launch_failure_diagnostic(self, directory: Path, error: Exception) -> Path:
         """Persist startup failures that occur before a page can be inspected."""
         directory.mkdir(parents=True, exist_ok=True)
@@ -1229,6 +1359,7 @@ class GoogleImagesBrowser:
             [name for name in lock_names if (self.cfg.profile_dir / name).exists()]
             if self.cfg.session_mode == "persistent_profile" else []
         )
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         report = {
             "generated_at": timestamp.isoformat(timespec="seconds"),
             "purpose": "Read-only browser environment comparison; browser launch failed.",
@@ -1262,9 +1393,11 @@ class GoogleImagesBrowser:
             },
         }
         path = directory / ("launch_failure_" + timestamp.strftime("%Y%m%d_%H%M%S") + ".json")
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
+# 功能：diagnose 函数，负责当前模块中的一项具体处理逻辑。
     def diagnose(self, directory: Path, keyword: str = "Albert Einstein") -> tuple[dict, Path]:
         """Capture a read-only environment report without bypassing challenges."""
         if not self.page or not self.context:
@@ -1280,6 +1413,7 @@ class GoogleImagesBrowser:
             navigation_error = f"{type(exc).__name__}: {exc}"
 
         state, reason = self._page_state()
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
         result_code, result_type, process_exit_code = diagnostic_outcome(state, navigation_error)
         try:
             title = self.page.title()
@@ -1311,6 +1445,7 @@ class GoogleImagesBrowser:
         local_storage_entries = sum(len(origin.get("localStorage", [])) for origin in origins)
 
         timestamp = datetime.now().astimezone()
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         report = {
             "generated_at": timestamp.isoformat(timespec="seconds"),
             "purpose": "Read-only browser environment comparison; no challenge interaction or bypass.",
@@ -1362,12 +1497,17 @@ class GoogleImagesBrowser:
 
         directory.mkdir(parents=True, exist_ok=True)
         prefix = "environment_" + timestamp.strftime("%Y%m%d_%H%M%S")
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         report_path = directory / f"{prefix}.json"
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         report["artifacts"] = self.save_diagnostics(directory, prefix)
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return report, report_path
 
+# 功能：_assert_normal_page 函数，负责当前模块中的一项具体处理逻辑。
     def _assert_normal_page(self):
         state, reason = self._page_state()
         if state == "challenge":
@@ -1375,10 +1515,12 @@ class GoogleImagesBrowser:
         if state == "consent":
             raise ConsentRequired(reason or "Google consent required")
 
+# 功能：page_state 函数，负责当前模块中的一项具体处理逻辑。
     def page_state(self) -> tuple[str, str | None]:
         """Return the visible Google page state without navigating or exposing content."""
         return self._page_state()
 
+# 功能：search 函数，负责当前模块中的一项具体处理逻辑。
     def search(self, keyword: str, max_results: int) -> tuple[str, list[ImageItem], int]:
         if not self.page:
             raise BrowserLaunchError("browser not started")

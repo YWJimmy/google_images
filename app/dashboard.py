@@ -1,4 +1,8 @@
 from __future__ import annotations
+# 本模块为 Google 图片自动搜索系统的一部分。
+# 整体流程：任务调度 -> 浏览器自动化 -> Google页面解析 -> 结果返回 -> 状态记录。
+# 以下注释仅用于解释工程设计，不改变任何执行逻辑。
+
 
 import argparse
 from dataclasses import replace
@@ -74,14 +78,17 @@ TASK_LABELS = {
 }
 
 
+# 功能：validate_local_cdp_endpoint 函数，负责当前模块中的一项具体处理逻辑。
 def validate_local_cdp_endpoint(endpoint: str) -> str:
     value = endpoint.strip().rstrip("/")
     parts = urlsplit(value)
+# port表示网络端口，用于区分同一主机上的不同服务入口。
     if parts.scheme != "http" or parts.hostname not in LOCAL_CDP_HOSTS or not parts.port:
         raise ValueError("CDP endpoint must be a local http URL with an explicit port")
     return value
 
 
+# 功能：validate_history_url 函数，负责当前模块中的一项具体处理逻辑。
 def validate_history_url(url: str) -> str:
     value = url.strip()
     parts = urlsplit(value)
@@ -90,6 +97,7 @@ def validate_history_url(url: str) -> str:
     return value
 
 
+# 功能：classify_cdp_page_urls 函数，负责当前模块中的一项具体处理逻辑。
 def classify_cdp_page_urls(urls: list[str]) -> str:
     """Classify local CDP tab URLs without retaining query strings or page content."""
     saw_google = False
@@ -99,6 +107,7 @@ def classify_cdp_page_urls(urls: list[str]) -> str:
         path = parts.path.lower()
         if is_google_host(host):
             saw_google = True
+# /sorry/ 是 Google 异常流量检测页面常见路径，用于识别风控状态。
         if is_google_host(host) and "/sorry/" in path:
             return "challenge"
         if host.startswith("consent.google."):
@@ -108,7 +117,9 @@ def classify_cdp_page_urls(urls: list[str]) -> str:
     return "other" if urls else "no_pages"
 
 
+# 类说明：ChromeSlot 封装相关业务状态和操作。
 class ChromeSlot:
+# 功能：__init__ 函数，负责当前模块中的一项具体处理逻辑。
     def __init__(self, slot_id: str, label: str, endpoint: str, cfg: Config):
         self.id = slot_id
         self.label = label
@@ -136,16 +147,20 @@ class ChromeSlot:
         self.clash_context_provider = None
 
     @property
+# 功能：active 函数，负责当前模块中的一项具体处理逻辑。
     def active(self) -> bool:
         return bool(self.worker and self.worker.is_alive())
 
+# 功能：_read_cdp_page_state 函数，负责当前模块中的一项具体处理逻辑。
     def _read_cdp_page_state(self) -> str:
         with urlopen(self.endpoint + "/json", timeout=2) as response:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
             targets = json.loads(response.read().decode("utf-8"))
         return classify_cdp_page_urls(
             [str(target.get("url", "")) for target in targets if target.get("type") == "page"]
         )
 
+# 功能：probe 函数，负责当前模块中的一项具体处理逻辑。
     def probe(self) -> None:
         online = False
         page_state = "unknown"
@@ -160,6 +175,9 @@ class ChromeSlot:
             self.last_probe_at = time.time()
             if not self.active:
                 self.page_state = page_state
+
+# 功能：生成 Dashboard展示所需状态快照。
+# 包含：任务、Chrome、Clash等运行信息。
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -187,6 +205,8 @@ class ChromeSlot:
                 "verification_count": self.verification_count,
                 "tasks": [dict(task) for task in self.tasks],
             }
+
+# 功能：启动一次新的自动搜索任务。
 
     def start_run(
         self, limit: int, max_results: int, post_delay: float, start_index: int = 1
@@ -250,12 +270,15 @@ class ChromeSlot:
             )
             self.worker.start()
 
+# 功能：停止正在运行的后台任务。
+
     def stop(self) -> None:
         with self.lock:
             if self.active:
                 self.run_state = "stopping"
                 self.stop_event.set()
 
+# 功能：_set_task 函数，负责当前模块中的一项具体处理逻辑。
     def _set_task(self, index: int, **changes) -> None:
         with self.lock:
             task = self.tasks[index - 1]
@@ -263,6 +286,7 @@ class ChromeSlot:
             status = str(task.get("status", "pending"))
             task["status_label"] = TASK_LABELS.get(status, status)
 
+# 功能：_wait_for_human 函数，负责当前模块中的一项具体处理逻辑。
     def _wait_for_human(self, browser: GoogleImagesBrowser) -> bool:
         while not self.stop_event.is_set():
             with self.lock:
@@ -287,6 +311,8 @@ class ChromeSlot:
             if page_state == "normal":
                 return True
         return False
+
+# 功能：Dashboard后台线程实际执行入口。
 
     def _run(
         self, source_tasks, max_results: int, post_delay: float, start_index: int = 1
@@ -334,6 +360,7 @@ class ChromeSlot:
                         )
                         if decision.result_code > 0:
                             status = "found"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
                         elif decision.result_code == -1:
                             status = "not_found"
                         else:
@@ -457,6 +484,8 @@ class ChromeSlot:
                     with self.lock:
                         self.telemetry_error = type(exc).__name__
 
+# 功能：控制浏览器访问历史相关页面，用于状态展示。
+
     def navigate_for_history(self, url: str) -> None:
         value = validate_history_url(url)
         with self.lock:
@@ -470,6 +499,7 @@ class ChromeSlot:
             daemon=True,
         ).start()
 
+# 功能：_navigate_for_history 函数，负责当前模块中的一项具体处理逻辑。
     def _navigate_for_history(self, url: str) -> None:
         browser = GoogleImagesBrowser(
             replace(self.cfg, session_mode="manual_cdp", cdp_endpoint=self.endpoint)
@@ -478,6 +508,7 @@ class ChromeSlot:
             browser.start()
             history_page = browser.context.new_page()
             history_page.bring_to_front()
+# 浏览器页面导航：通过真实页面加载触发Chrome环境、Cookie和JavaScript流程。
             history_page.goto(
                 url,
                 wait_until="domcontentloaded",
@@ -507,6 +538,7 @@ OPERATION_LABELS = {
 }
 
 
+# 功能：_bounded_text 函数，负责当前模块中的一项具体处理逻辑。
 def _bounded_text(value: object, name: str, limit: int = 200) -> str:
     text = str(value or "").strip()
     if len(text) > limit or any(ord(char) < 32 for char in text):
@@ -514,9 +546,11 @@ def _bounded_text(value: object, name: str, limit: int = 200) -> str:
     return text
 
 
+# 类说明：OperationManager 封装相关业务状态和操作。
 class OperationManager:
     """Run a fixed allowlist of local project operations without shell expansion."""
 
+# 功能：__init__ 函数，负责当前模块中的一项具体处理逻辑。
     def __init__(self, root: Path, config_path: Path):
         self.root = root.resolve()
         self.config_path = config_path.resolve()
@@ -527,6 +561,7 @@ class OperationManager:
         self.status = "idle"
         self.started_at: str | None = None
         self.finished_at: str | None = None
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
         self.return_code: int | None = None
         self.output = ""
         self.message = ""
@@ -538,8 +573,12 @@ class OperationManager:
         self.progress_status = ""
 
     @property
+# 功能：active 函数，负责当前模块中的一项具体处理逻辑。
     def active(self) -> bool:
         return bool(self.worker and self.worker.is_alive())
+
+# 功能：生成 Dashboard展示所需状态快照。
+# 包含：任务、Chrome、Clash等运行信息。
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -565,16 +604,19 @@ class OperationManager:
                 "progress_status": self.progress_status,
             }
 
+# 功能：_positive_int 函数，负责当前模块中的一项具体处理逻辑。
     def _positive_int(self, payload: dict, key: str, default: int, maximum: int) -> int:
         value = int(payload.get(key, default))
         if not 1 <= value <= maximum:
             raise ValueError(f"{key} must be between 1 and {maximum}")
         return value
 
+# 功能：_command 函数，负责当前模块中的一项具体处理逻辑。
     def _command(self, action: str, payload: dict) -> list[str]:
         if action not in OPERATION_LABELS:
             raise ValueError("unknown operation")
         base = [sys.executable, "-m", "app.main", "--config", str(self.config_path)]
+# 9222通常用于 Chrome DevTools Protocol(CDP) 调试连接端口。
         endpoint = validate_local_cdp_endpoint(str(payload.get("endpoint", "http://127.0.0.1:9222")))
         if action == "self_check":
             dashboard_base_url = validate_local_cdp_endpoint(
@@ -628,6 +670,9 @@ class OperationManager:
             return [sys.executable, "-m", "pip", "install", "-r", str(self.root / "requirements.txt")]
         raise ValueError("unknown operation")
 
+# 功能：启动浏览器自动化环境。
+# 位置：由搜索流程调用，负责建立 Browser / Context / Page 等 Playwright运行链路。
+
     def start(self, action: str, payload: dict) -> None:
         command = self._command(action, payload)
         with self.lock:
@@ -637,6 +682,7 @@ class OperationManager:
             self.status = "starting"
             self.started_at = datetime.now().isoformat(timespec="seconds")
             self.finished_at = None
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
             self.return_code = None
             self.output = ""
             self.message = ""
@@ -656,6 +702,8 @@ class OperationManager:
                 target=self._run, args=(command,), name=f"operation-{action}", daemon=True
             )
             self.worker.start()
+
+# 功能：Dashboard后台线程实际执行入口。
 
     def _run(self, command: list[str]) -> None:
         try:
@@ -681,11 +729,16 @@ class OperationManager:
             for line in process.stdout:
                 with self.lock:
                     self._consume_output_line(line)
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
             return_code = process.wait()
             with self.lock:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
                 self.return_code = return_code
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
                 self.status = "complete" if return_code == 0 else "error"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
                 self.message = "操作完成" if return_code == 0 else f"操作退出码：{return_code}"
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
                 if return_code == 0 and self.progress_total is not None:
                     self.progress_current = self.progress_total
                     self.progress_status = "已完成"
@@ -698,6 +751,7 @@ class OperationManager:
                 self.process = None
                 self.finished_at = datetime.now().isoformat(timespec="seconds")
 
+# 功能：_consume_output_line 函数，负责当前模块中的一项具体处理逻辑。
     def _consume_output_line(self, line: str) -> None:
         """Update visible output and progress from one unbuffered child-process line."""
         self.last_activity_at = datetime.now().isoformat(timespec="seconds")
@@ -719,6 +773,8 @@ class OperationManager:
             self.progress_status = "正在处理"
         self.output = (self.output + line)[-50000:]
 
+# 功能：停止正在运行的后台任务。
+
     def stop(self) -> None:
         with self.lock:
             process = self.process
@@ -728,7 +784,9 @@ class OperationManager:
             process.terminate()
 
 
+# 类说明：DashboardManager 封装相关业务状态和操作。
 class DashboardManager:
+# 功能：__init__ 函数，负责当前模块中的一项具体处理逻辑。
     def __init__(self, cfg: Config, config_path: Path | None = None):
         self.cfg = cfg
         self.config_path = (config_path or Path("config.yaml")).resolve()
@@ -748,6 +806,7 @@ class DashboardManager:
         self.monitor = threading.Thread(target=self._monitor, daemon=True)
         self.monitor.start()
 
+# 功能：_load_registry 函数，负责当前模块中的一项具体处理逻辑。
     def _load_registry(self) -> None:
         entries = []
         try:
@@ -755,6 +814,7 @@ class DashboardManager:
         except Exception:
             entries = []
         if not entries:
+# 9222通常用于 Chrome DevTools Protocol(CDP) 调试连接端口。
             entries = [{"id": "chrome-9222", "label": "专用 Chrome 9222", "endpoint": self.cfg.cdp_endpoint}]
         for entry in entries:
             try:
@@ -764,6 +824,7 @@ class DashboardManager:
             except Exception:
                 continue
 
+# 功能：_save_registry 函数，负责当前模块中的一项具体处理逻辑。
     def _save_registry(self) -> None:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         payload = [
@@ -774,12 +835,14 @@ class DashboardManager:
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.registry_path)
 
+# 功能：_monitor 函数，负责当前模块中的一项具体处理逻辑。
     def _monitor(self) -> None:
         while not self.stop_event.is_set():
             for slot in list(self.slots.values()):
                 slot.probe()
             self.stop_event.wait(HUMAN_POLL_SECONDS)
 
+# 功能：add_slot 函数，负责当前模块中的一项具体处理逻辑。
     def add_slot(self, label: str, endpoint: str) -> ChromeSlot:
         endpoint = validate_local_cdp_endpoint(endpoint)
         with self.lock:
@@ -793,6 +856,7 @@ class DashboardManager:
             slot.probe()
             return slot
 
+# 功能：get 函数，负责当前模块中的一项具体处理逻辑。
     def get(self, slot_id: str | None) -> ChromeSlot:
         with self.lock:
             if slot_id and slot_id in self.slots:
@@ -800,6 +864,8 @@ class DashboardManager:
             if not self.slots:
                 raise ValueError("no Chrome windows configured")
             return next(iter(self.slots.values()))
+
+# 功能：获取 Clash 当前运行状态，包括代理组和节点信息。
 
     def status(self, slot_id: str | None) -> dict:
         selected = self.get(slot_id)
@@ -809,6 +875,7 @@ class DashboardManager:
                 item
                 for item in self.profile_manager.entries()
                 if str(item.get("port", "")).isdigit()
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 and f"http://127.0.0.1:{int(item['port'])}" == selected.endpoint
             ),
             None,
@@ -847,11 +914,13 @@ class DashboardManager:
         data["operation"] = self.operations.snapshot()
         return data
 
+# 功能：profiles 函数，负责当前模块中的一项具体处理逻辑。
     def profiles(self) -> list[dict]:
         result = []
         for item in self.profile_manager.entries():
             if not str(item.get("port", "")).isdigit():
                 continue
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             endpoint = f"http://127.0.0.1:{int(item.get('port', 0))}"
             slot = next((value for value in self.slots.values() if value.endpoint == endpoint), None)
             profile = {
@@ -871,6 +940,7 @@ class DashboardManager:
             result.append(profile)
         return result
 
+# 功能：profile_suggestion 函数，负责当前模块中的一项具体处理逻辑。
     def profile_suggestion(self) -> dict:
         names = {str(item.get("name", "")) for item in self.profile_manager.entries()}
         index = 1
@@ -882,11 +952,16 @@ class DashboardManager:
             "url": DEFAULT_START_URL,
         }
 
+# 功能：create_profile 函数，负责当前模块中的一项具体处理逻辑。
+# port表示网络端口，用于区分同一主机上的不同服务入口。
     def create_profile(self, name: str, port: int | None, url: str, proxy_url: str = "") -> dict:
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         selected_port = port if port is not None else self.profile_manager.suggest_port()
         entry = self.profile_manager.create(
+# port表示网络端口，用于区分同一主机上的不同服务入口。
             name, selected_port, proxy_url=proxy_url, register_dashboard=False
         )
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         endpoint = f"http://127.0.0.1:{entry['port']}"
         with self.lock:
             existing = next((slot for slot in self.slots.values() if slot.endpoint == endpoint), None)
@@ -899,18 +974,22 @@ class DashboardManager:
         launch_state = self.profile_manager.launch(entry, url)
         return {"chrome_id": slot.id, "launch_state": launch_state, **entry}
 
+# 功能：start_profile 函数，负责当前模块中的一项具体处理逻辑。
     def start_profile(self, name: str, url: str) -> dict:
         entry = self.profile_manager.get(name)
         return {"launch_state": self.profile_manager.launch(entry, url), **entry}
 
+# 功能：set_profile_proxy 函数，负责当前模块中的一项具体处理逻辑。
     def set_profile_proxy(self, name: str, proxy_url: str) -> dict:
         entry = self.profile_manager.get(name)
+# port表示网络端口，用于区分同一主机上的不同服务入口。
         online = endpoint_online(int(entry["port"]))
         updated = self.profile_manager.update_proxy(name, proxy_url)
         if online:
             updated = self.profile_manager.update_proxy_status(name, restart_required=True)
         return {"ok": True, "online": online, **updated}
 
+# 功能：check_profile_proxy 函数，负责当前模块中的一项具体处理逻辑。
     def check_profile_proxy(self, name: str) -> dict:
         entry = self.profile_manager.get(name)
         proxy_url = str(entry.get("proxy_url", ""))
@@ -942,6 +1021,7 @@ class DashboardManager:
             )
             raise
 
+# 功能：start_operation 函数，负责当前模块中的一项具体处理逻辑。
     def start_operation(self, action: str, payload: dict) -> None:
         endpoint = payload.get("endpoint")
         if endpoint:
@@ -951,15 +1031,18 @@ class DashboardManager:
                 raise ValueError("selected Chrome already has an active dashboard task")
         self.operations.start(action, payload)
 
+# 功能：recent_verification_events 函数，负责当前模块中的一项具体处理逻辑。
     def recent_verification_events(self, limit: int = 50) -> list[dict]:
         return CollectionTelemetry(telemetry_path(self.cfg.log_dir)).recent_events(
             max(1, min(int(limit), 200))
         )
 
+# 功能：current_clash_context 函数，负责当前模块中的一项具体处理逻辑。
     def current_clash_context(self) -> dict[str, str | None]:
         with self.lock:
             return dict(self.clash_context)
 
+# 功能：live_clash_context 函数，负责当前模块中的一项具体处理逻辑。
     def live_clash_context(self) -> dict[str, str | None]:
         """Refresh the active leaf only when a verification event needs attribution."""
         cached = self.current_clash_context()
@@ -986,6 +1069,7 @@ class DashboardManager:
             return cached
         return self.current_clash_context()
 
+# 功能：clash_status 函数，负责当前模块中的一项具体处理逻辑。
     def clash_status(self, endpoint: str, secret: str) -> dict:
         controller = ClashController(endpoint, secret)
         result = controller.status()
@@ -1005,6 +1089,7 @@ class DashboardManager:
                 }
         return result
 
+# 功能：switch_clash 函数，负责当前模块中的一项具体处理逻辑。
     def switch_clash(self, endpoint: str, secret: str, group: str, node: str) -> dict:
         controller = ClashController(endpoint, secret)
         result = controller.switch(group, node)
@@ -1016,6 +1101,7 @@ class DashboardManager:
             self.clash_context = {"clash_group": group, "clash_node": current_leaf}
         return result
 
+# 功能：probe_clash_nodes 函数，负责当前模块中的一项具体处理逻辑。
     def probe_clash_nodes(
         self, endpoint: str, secret: str, group: str, timeout_ms: int, max_nodes: int
     ) -> dict:
@@ -1044,13 +1130,17 @@ class DashboardManager:
         return result
 
 
+# 类说明：DashboardHandler 封装相关业务状态和操作。
 class DashboardHandler(BaseHTTPRequestHandler):
     server: "DashboardServer"
 
+# 功能：log_message 函数，负责当前模块中的一项具体处理逻辑。
     def log_message(self, _format, *_args):
         return
 
+# 功能：_json 函数，负责当前模块中的一项具体处理逻辑。
     def _json(self, payload: dict, status: int = 200) -> None:
+# 状态码用于区分成功、网络异常、Google Challenge等不同结果。
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1059,10 +1149,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+# 功能：_body 函数，负责当前模块中的一项具体处理逻辑。
     def _body(self) -> dict:
         length = min(int(self.headers.get("Content-Length", "0")), 16384)
         return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
 
+# 功能：do_GET 函数，负责当前模块中的一项具体处理逻辑。
     def do_GET(self):
         parts = urlsplit(self.path)
         if parts.path == "/":
@@ -1103,6 +1195,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         self._json({"error": "not found"}, 404)
 
+# 功能：do_POST 函数，负责当前模块中的一项具体处理逻辑。
     def do_POST(self):
         try:
             payload = self._body()
@@ -1113,6 +1206,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "chrome_id": slot.id})
                 return
             if self.path == "/api/profiles/create":
+# port表示网络端口，用于区分同一主机上的不同服务入口。
                 raw_port = payload.get("port")
                 result = self.server.manager.create_profile(
                     str(payload.get("name", "")),
@@ -1219,16 +1313,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 400)
 
 
+# 类说明：DashboardServer 封装相关业务状态和操作。
 class DashboardServer(ThreadingHTTPServer):
+# 功能：__init__ 函数，负责当前模块中的一项具体处理逻辑。
     def __init__(self, address, manager: DashboardManager):
         super().__init__(address, DashboardHandler)
         self.manager = manager
 
 
+# 功能：main 函数，负责当前模块中的一项具体处理逻辑。
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local Chrome monitoring dashboard")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--host", default="127.0.0.1")
+# port表示网络端口，用于区分同一主机上的不同服务入口。
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open-browser", action="store_true")
     args = parser.parse_args()
@@ -1236,7 +1334,9 @@ def main() -> None:
         raise SystemExit("dashboard host must be loopback-only")
     cfg = load_config(args.config)
     manager = DashboardManager(cfg, Path(args.config))
+# port表示网络端口，用于区分同一主机上的不同服务入口。
     server = DashboardServer((args.host, args.port), manager)
+# port表示网络端口，用于区分同一主机上的不同服务入口。
     url = f"http://{args.host}:{args.port}/"
     print(f"Dashboard: {url}")
     if args.open_browser:
