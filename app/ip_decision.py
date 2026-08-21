@@ -1,13 +1,14 @@
 
 """
-IP决策层
+IP决策执行辅助层
 
-职责:
-1. 根据历史池过滤不可用IP
-2. 根据节点评分排序
-3. 输出候选节点选择结果
+负责:
+- 节点排序
+- 冷却节点过滤
+- 选择最佳候选
 
-不直接控制Clash。
+不负责:
+- Clash API调用
 """
 
 class IpDecisionEngine:
@@ -18,53 +19,39 @@ class IpDecisionEngine:
 
 
     def rank_nodes(self, nodes):
-        """
-        nodes:
-        [
-          {
-            "clash_name": "...",
-            "type": "..."
-          }
-        ]
-        """
-
-        result = []
+        ranked = []
 
         for node in nodes:
             name = node["clash_name"]
 
-            score = self.score_store.get_score(
-                name
-            )
+            score = self.score_store.get_score(name)
 
-            result.append({
+            ranked.append({
                 "node": node,
-                "score": score.get(
-                    "score",
-                    0
-                )
+                "score": score.get("score", 0)
             })
 
-        result.sort(
-            key=lambda x:x["score"],
+        ranked.sort(
+            key=lambda x: x["score"],
             reverse=True
         )
 
-        return result
+        return ranked
 
 
-    def filter_cooling(self, candidates):
+    def choose(self, nodes):
+        ranked = self.rank_nodes(nodes)
 
-        usable = []
         skipped = []
+        usable = []
 
-        for item in candidates:
-
-            node = item["node"]
-
-            # 当前版本只检查已有IP记录
-            # 完整IP绑定将在后续接入
-
+        for item in ranked:
+            # 预留完整IP冷却检查
+            # 当前需要由ip_history绑定full_ip后启用
             usable.append(item)
 
-        return usable, skipped
+        return {
+            "selected": usable[0] if usable else None,
+            "usable": usable,
+            "skipped": skipped
+        }

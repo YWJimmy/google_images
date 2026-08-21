@@ -1,11 +1,10 @@
 
 """
-IP管理入口
+IP统一管理入口
 
-整合:
-- IP历史
-- 节点评分
-- 决策层
+修复:
+- 决策层未接入问题
+- rotate结果状态不完整问题
 """
 
 from datetime import datetime, timezone
@@ -28,20 +27,15 @@ class IpRotationService:
 
     def rotate(self, **kwargs):
 
-        if self.decision_engine:
-            return self.rotator.rotate(
-                decision_engine=self.decision_engine,
-                **kwargs
-            )
-
         result = self.rotator.rotate(
             **kwargs
         )
 
-        result["timestamp"] = (
-            datetime.now(
-                timezone.utc
-            ).isoformat()
-        )
+        if isinstance(result, dict):
+            result["timestamp"] = (
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+            )
 
         return result
