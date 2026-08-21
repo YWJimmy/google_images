@@ -48,10 +48,11 @@ class ClashIpRotator:
         }
 
 
-    def rotate(self, group=None, wait_after_switch=3):
+    def rotate(self, group=None, wait_after_switch=3, decision_engine=None):
 
         attempts = []
         decision_info = None
+
 
         if group is None:
             detected = self.detector.find_active_group()
@@ -75,9 +76,11 @@ class ClashIpRotator:
         )
 
 
-        # v3.7: 接入节点决策层
-        if self.decision_engine:
-            decision = self.decision_engine.choose(nodes)
+        # v3.7+: 接入节点决策层
+        engine = decision_engine or self.decision_engine
+
+        if engine:
+            decision = engine.choose(nodes)
             decision_info = decision
 
             selected = decision.get("selected")
@@ -130,8 +133,8 @@ class ClashIpRotator:
                     "ip_fingerprint"
                 ):
 
-                    if self.decision_engine:
-                        self.decision_engine.score_store.record_success(
+                    if engine:
+                        engine.score_store.record_success(
                             name,
                             new.get("latency_ms")
                         )
@@ -160,8 +163,8 @@ class ClashIpRotator:
                     "reason":str(e)
                 })
 
-                if self.decision_engine:
-                    self.decision_engine.score_store.record_fail(
+                if engine:
+                    engine.score_store.record_fail(
                         name
                     )
 

@@ -2,9 +2,10 @@
 """
 IP统一管理入口
 
-修复:
-- 决策层未接入问题
-- rotate结果状态不完整问题
+职责:
+- 管理IP轮换服务
+- 将决策引擎传递给执行层
+- 统一返回时间戳
 """
 
 from datetime import datetime, timezone
@@ -27,15 +28,19 @@ class IpRotationService:
 
     def rotate(self, **kwargs):
 
+        if (
+            "decision_engine" not in kwargs
+            and self.decision_engine is not None
+        ):
+            kwargs["decision_engine"] = self.decision_engine
+
         result = self.rotator.rotate(
             **kwargs
         )
 
         if isinstance(result, dict):
-            result["timestamp"] = (
-                datetime.now(
-                    timezone.utc
-                ).isoformat()
-            )
+            result["timestamp"] = datetime.now(
+                timezone.utc
+            ).isoformat()
 
         return result
