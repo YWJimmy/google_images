@@ -37,7 +37,7 @@ class IpHistoryStore:
 
 
     def record_ip(self, ip, node=None, group=None,
-                  status="ok", subnet=None):
+                  status="ok", subnet=None, cooling_until=None):
 
         data=self._load()
 
@@ -46,6 +46,7 @@ class IpHistoryStore:
             "group":group,
             "subnet":subnet,
             "status":status,
+            "cooling_until":cooling_until,
             "updated":datetime.now(timezone.utc).isoformat()
         }
 
@@ -54,6 +55,7 @@ class IpHistoryStore:
                 "ip":ip,
                 "group":group,
                 "status":status,
+                "cooling_until":cooling_until,
                 "updated":datetime.now(timezone.utc).isoformat()
             }
 
@@ -88,17 +90,21 @@ class IpHistoryStore:
         )
 
 
-    def mark_same_egress(self, ip, node=None, group=None):
+    def mark_same_egress(self, ip, node=None, group=None, minutes=30):
         """
         记录出口重复风险。
         用于后续决策层降低节点优先级。
         """
         data = self._load()
+        cooling_until = (
+            datetime.now(timezone.utc) + timedelta(minutes=minutes)
+        ).isoformat()
 
         data["ips"][ip] = {
             "node": node,
             "group": group,
             "status": "same_egress",
+            "cooling_until": cooling_until,
             "updated": datetime.now(timezone.utc).isoformat()
         }
 
@@ -107,7 +113,23 @@ class IpHistoryStore:
                 "ip": ip,
                 "group": group,
                 "status": "same_egress",
+                "cooling_until": cooling_until,
                 "updated": datetime.now(timezone.utc).isoformat()
             }
 
         self._save(data)
+
+
+    def get_node_status(self, node):
+        item = self._load().get("nodes", {}).get(node)
+        if not item:
+            return None
+        status = item.get("status")
+        cooling_until = item.get("cooling_until")
+        if cooling_until:
+            try:
+                if datetime.fromisoformat(cooling_until) <= datetime.now(timezone.utc):
+                    return "active"
+            except ValueError:
+                pass
+        return status
