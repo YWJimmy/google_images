@@ -1,17 +1,14 @@
 
 """
-v3.3 IP统一管理
+IP管理入口
 
-新增:
-- 完整IP内部判断
-- 历史池
-- 冷却机制
-- 隐私显示分离
+整合:
+- IP历史
+- 节点评分
+- 决策层
 """
 
 from datetime import datetime, timezone
-
-from .ip_history import IpHistoryStore
 
 
 class IpRotationService:
@@ -19,14 +16,10 @@ class IpRotationService:
     def __init__(
         self,
         rotator,
-        history=None
+        decision_engine=None
     ):
         self.rotator = rotator
-
-        self.history = (
-            history
-            or IpHistoryStore()
-        )
+        self.decision_engine = decision_engine
 
 
     def current(self):
@@ -34,6 +27,12 @@ class IpRotationService:
 
 
     def rotate(self, **kwargs):
+
+        if self.decision_engine:
+            return self.rotator.rotate(
+                decision_engine=self.decision_engine,
+                **kwargs
+            )
 
         result = self.rotator.rotate(
             **kwargs
@@ -45,42 +44,4 @@ class IpRotationService:
             ).isoformat()
         )
 
-        if result.get("ok"):
-
-            new_ip = result.get(
-                "new_ip",
-                {}
-            )
-
-            full_ip = new_ip.get(
-                "full_ip"
-            )
-
-            if full_ip:
-                self.history.record_ip(
-                    full_ip,
-                    result.get("node"),
-                    result.get("group")
-                )
-
         return result
-
-
-    def mark_challenge(
-        self,
-        ip,
-        node=None
-    ):
-
-        self.history.record_ip(
-            ip,
-            node=node,
-            status="challenge"
-        )
-
-
-    def success(self, result):
-        return bool(
-            isinstance(result, dict)
-            and result.get("ok")
-        )
