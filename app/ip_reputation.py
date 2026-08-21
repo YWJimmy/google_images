@@ -23,9 +23,32 @@ class IpReputationService:
         challenge = int(identity.get("challenge") or 0)
         total = success + failure + challenge
         success_rate = success / total if total else 0.5
-        value = 50 + success_rate * 45 - failure * 3 - challenge * 12
+        age_bonus = 0.0
+        first_seen = identity.get("first_seen")
+        if first_seen:
+            try:
+                age_hours = max(
+                    0.0,
+                    (datetime.now(timezone.utc) - datetime.fromisoformat(str(first_seen))).total_seconds()
+                    / 3600,
+                )
+                age_bonus = min(age_hours / (24 * 7) * 5, 5)
+            except ValueError:
+                pass
+        value = 50 + success_rate * 45 + age_bonus - failure * 3 - challenge * 12
         if identity.get("status") == "COOLING":
-            value -= 40
+            cooling_until = identity.get("cooling_until")
+            cooling_active = True
+            if cooling_until:
+                try:
+                    cooling_active = (
+                        datetime.fromisoformat(str(cooling_until))
+                        > datetime.now(timezone.utc)
+                    )
+                except ValueError:
+                    pass
+            if cooling_active:
+                value -= 40
         elif identity.get("status") == "BLOCKED":
             value = 0
         return round(max(0.0, min(100.0, value)), 2)
@@ -45,10 +68,17 @@ class IpReputationService:
         return state
 
     def mark_challenge(self, full_ip: str, *, node: str | None = None) -> str:
+        return self.cool(full_ip, "challenge", node=node)
+
+    def mark_same_egress(self, full_ip: str, *, node: str | None = None) -> str:
+        return self.cool(full_ip, "same_egress", node=node)
+
+    def cool(self, full_ip: str, event_type: str, *, node: str | None = None,
+             minutes: int | None = None) -> str:
         until = datetime.now(timezone.utc) + timedelta(
-            minutes=self.challenge_cooling_minutes
+            minutes=self.challenge_cooling_minutes if minutes is None else minutes
         )
-        self.database.record_event("challenge", full_ip=full_ip, node=node)
+        self.database.record_event(event_type, full_ip=full_ip, node=node)
         self.database.set_ip_state(full_ip, "COOLING", until.isoformat())
         return until.isoformat()
 
@@ -57,4 +87,3 @@ class IpReputationService:
         self.database.record_event("blocked", full_ip=full_ip, node=node,
                                    details={"reason": reason})
         self.database.set_ip_state(full_ip, "BLOCKED")
-

@@ -46,7 +46,7 @@ class FullIpCollector:
         self.providers = providers
 
     def collect(self, proxy_url: str, *, timeout: float = 6,
-                minimum_consensus: int = 1) -> dict[str, Any]:
+                minimum_consensus: int | None = None) -> dict[str, Any]:
         started = time.perf_counter()
         observations: list[dict[str, Any]] = []
         for provider, url in self.providers:
@@ -73,7 +73,11 @@ class FullIpCollector:
             }
         counts = Counter(str(item["full_ip"]) for item in valid)
         full_ip, votes = counts.most_common(1)[0]
-        required = max(1, min(int(minimum_consensus), len(self.providers)))
+        required = (
+            max(1, min(int(minimum_consensus), len(self.providers)))
+            if minimum_consensus is not None
+            else (2 if len(valid) > 1 else 1)
+        )
         if votes < required:
             return {
                 "ok": False,
@@ -104,4 +108,3 @@ def mask_full_ip(value: str | None) -> str | None:
         return ".".join(parts[:2] + ["xxx", "xxx"])
     parts = address.exploded.split(":")
     return ":".join(parts[:2] + ["xxxx"] * 6)
-

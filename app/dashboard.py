@@ -38,6 +38,7 @@ from .secret_store import DashboardSecretStore
 from .database import IpIntelligenceDatabase
 from .error_codes import describe
 from .ip_decision import IpDecisionEngine
+from .full_ip import mask_full_ip
 from .ip_history import IpHistoryStore
 from .ip_identity import IpIdentityService
 from .ip_reputation import IpReputationService
@@ -1219,9 +1220,23 @@ class DashboardManager:
                     result["chrome_verification"] = ChromeIpVerifier().verify(
                         validate_local_cdp_endpoint(cdp_endpoint), expected
                     )
-            return result
+            return self._public_ip_result(result)
         finally:
             self.ip_rotation_lock.release()
+
+    @classmethod
+    def _public_ip_result(cls, value):
+        if isinstance(value, list):
+            return [cls._public_ip_result(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        public = {}
+        for key, item in value.items():
+            if key == "full_ip":
+                public.setdefault("masked_ip", mask_full_ip(str(item)) if item else None)
+                continue
+            public[key] = cls._public_ip_result(item)
+        return public
 
 
 # 类说明：DashboardHandler 封装相关业务状态和操作。

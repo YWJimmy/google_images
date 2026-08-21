@@ -66,6 +66,10 @@ class IpIdentityService:
             identity = dict(row)
             identity["full_ip"] = full_ip
             cluster = clusters.get(full_ip, {}) if full_ip else {}
+            success = int(row.get("success") or 0)
+            failure = int(row.get("failure") or 0)
+            challenge = int(row.get("challenge") or 0)
+            total = success + failure + challenge
             output.append({
                 "node": row["name"],
                 "type": row.get("type"),
@@ -73,12 +77,13 @@ class IpIdentityService:
                 "masked_ip": mask_full_ip(full_ip) if full_ip else None,
                 "status": self.reputation.effective_state(identity),
                 "ip_score": self.reputation.score(identity),
-                "success": row.get("success") or 0,
-                "failure": row.get("failure") or 0,
-                "challenge": row.get("challenge") or 0,
+                "success": success,
+                "failure": failure,
+                "challenge": challenge,
+                "success_rate": round(success / total * 100, 1) if total else None,
+                "last_challenge": row.get("last_challenge"),
                 "last_seen": row.get("observed_at"),
                 "cluster_id": cluster.get("cluster_id"),
                 "shared_egress": cluster.get("shared", False),
             })
         return output
-

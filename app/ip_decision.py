@@ -143,6 +143,10 @@ class IpDecisionEngine:
         service = self.identity_service
         database = getattr(service, "database", None)
         if database is not None and full_ip:
-            database.record_event(
-                normalized, full_ip=full_ip, node=node, details={"group": group}
-            )
+            reputation = getattr(service, "reputation", None)
+            if normalized == "same_egress" and reputation is not None:
+                reputation.mark_same_egress(full_ip, node=node)
+            else:
+                database.record_event(
+                    normalized, full_ip=full_ip, node=node, details={"group": group}
+                )

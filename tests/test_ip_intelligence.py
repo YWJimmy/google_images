@@ -32,6 +32,19 @@ def test_full_ip_collector_uses_provider_consensus():
     assert mask_full_ip(result["full_ip"]) == "203.0.xxx.xxx"
 
 
+def test_full_ip_collector_rejects_disagreeing_valid_providers():
+    collector = FullIpCollector(
+        fetcher=lambda url, _proxy, _timeout: (
+            '{"ip":"203.0.113.10"}' if "ipify" in url
+            else ('198.51.100.20' if "ifconfig" in url
+                  else '{"ip":"192.0.2.30"}')
+        )
+    )
+    result = collector.collect("http://127.0.0.1:7897")
+    assert result["ok"] is False
+    assert result["error_code"] == "IP_PROVIDER_MISMATCH"
+
+
 def test_identity_database_tracks_mapping_cluster_and_stability():
     database = IpIntelligenceDatabase(database_path())
     identity = IpIdentityService(database)
@@ -57,6 +70,14 @@ def test_reputation_challenge_enters_cooling():
     current = database.latest_ip_for_node("Node A")
     assert reputation.effective_state(current) == "COOLING"
     assert reputation.score(current) < 50
+
+
+def test_same_egress_cools_the_shared_ip_identity():
+    database = IpIntelligenceDatabase(database_path())
+    database.observe_ip("Node A", "203.0.113.10")
+    reputation = IpReputationService(database)
+    reputation.mark_same_egress("203.0.113.10", node="Node A")
+    assert database.latest_ip_for_node("Node A")["status"] == "COOLING"
 
 
 def test_rotation_log_is_idempotent_per_attempt():

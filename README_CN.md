@@ -1,5 +1,8 @@
 # Google Images 本地排名追踪器 v1
 
+> IP 智能轮换、完整出口身份、信誉冷却及 Dashboard 使用说明见
+> [IP_INTELLIGENCE_V39.md](IP_INTELLIGENCE_V39.md)。
+
 ## 重要边界
 
 本项目**不使用任何外部 SERP API**。它在你的本机启动 Google Chrome，通过 Playwright 打开 Google Images 搜索页面并解析结果。
@@ -8,7 +11,7 @@
 
 - 破解或自动解决 CAPTCHA；
 - 绕过 `unusual traffic`；
-- 自动切换 IP/VPN/代理；
+- 因 Google Challenge 自动切换 IP/VPN/代理（智能轮换只能由用户在 Dashboard 明确确认触发）；
 - 伪造 Cookie、Session 或浏览器指纹；
 - 随机鼠标/键盘/停顿去伪装真人；
 - 在出现 Google 反自动化挑战后继续强行请求。

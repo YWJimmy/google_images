@@ -33,6 +33,7 @@ def test_dashboard_returns_only_masked_ip_and_challenge_cooling():
     assert "full_ip" not in rows[0]
     assert rows[0]["status"] == "COOLING"
     assert rows[0]["challenge"] == 1
+    assert rows[0]["last_challenge"]
 
 
 def test_dashboard_smart_rotation_updates_context_and_checks_chrome(monkeypatch):
@@ -64,6 +65,8 @@ def test_dashboard_smart_rotation_updates_context_and_checks_chrome(monkeypatch)
         "Proxy", "http://127.0.0.1:9222", 3,
     )
     assert result["chrome_verification"]["matches_expected"] is True
+    assert "full_ip" not in result["new_ip"]
+    assert result["new_ip"]["masked_ip"] == "198.51.xxx.xxx"
     assert manager.current_clash_context() == {
         "clash_group": "Proxy", "clash_node": "Node B"
     }

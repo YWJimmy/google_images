@@ -201,8 +201,11 @@ class IpIntelligenceDatabase:
         with closing(self._connect()) as conn:
             rows = conn.execute(
                 """SELECT n.name, n.type, n.country AS node_country,
-                          h.full_ip, h.observed_at, i.country, i.success,
-                          i.failure, i.challenge, i.status, i.cooling_until
+                          h.full_ip, h.observed_at, i.country, i.first_seen, i.success,
+                          i.failure, i.challenge, i.status, i.cooling_until,
+                          (SELECT MAX(e.occurred_at) FROM ip_event e
+                           WHERE e.full_ip=i.full_ip AND e.event_type='challenge')
+                          AS last_challenge
                    FROM node_table n
                    LEFT JOIN node_ip_history h ON h.id=(
                        SELECT id FROM node_ip_history
@@ -233,4 +236,3 @@ class IpIntelligenceDatabase:
                  state, reason, utc_now(),
                  json.dumps(details or {}, ensure_ascii=False, sort_keys=True)),
             )
-
