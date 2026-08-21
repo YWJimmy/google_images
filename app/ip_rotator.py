@@ -76,25 +76,42 @@ class ClashIpRotator:
         )
 
 
-        # v3.7: 接入节点决策层
+        # v3.8: 决策层作为唯一节点选择来源
+        #
+        # 注意:
+        # engine.choose() 返回的是已经完成风险过滤后的结果。
+        # 后续禁止重新排序、随机选择或重新调用节点发现逻辑。
+        # rotate() 只能执行 decision.selected 指定的节点。
         if engine:
             decision = engine.choose(nodes)
 
             selected = decision.get("selected")
 
-            if selected:
-                ordered = [
-                    selected["node"]
-                ]
+            if not selected:
+                return {
+                    "ok": False,
+                    "error_code": "NO_USABLE_NODE",
+                    "group": group,
+                    "decision": decision
+                }
 
-                for item in decision.get("usable", []):
-                    if item["node"] not in ordered:
-                        ordered.append(item["node"])
+            selected_node = selected.get("node")
 
-                nodes = ordered
+            if not selected_node:
+                return {
+                    "ok": False,
+                    "error_code": "INVALID_DECISION_RESULT",
+                    "group": group,
+                    "decision": decision
+                }
 
-            else:
-                nodes = []
+            # 唯一目标节点
+            nodes = [selected_node]
+
+            print({
+                "decision_selected": selected_node.get("clash_name"),
+                "switch_target": selected_node.get("clash_name")
+            })
 
 
         for node in nodes:
