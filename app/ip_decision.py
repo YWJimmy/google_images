@@ -1,14 +1,12 @@
 
 """
-IP决策执行辅助层
+IP决策层
 
-负责:
-- 节点排序
-- 冷却节点过滤
-- 选择最佳候选
+根据:
+- 节点评分
+- IP历史
 
-不负责:
-- Clash API调用
+生成候选顺序。
 """
 
 class IpDecisionEngine:
@@ -19,39 +17,33 @@ class IpDecisionEngine:
 
 
     def rank_nodes(self, nodes):
-        ranked = []
+
+        ranked=[]
 
         for node in nodes:
-            name = node["clash_name"]
+            name=node["clash_name"]
 
-            score = self.score_store.get_score(name)
+            score=self.score_store.get_score(name)
 
             ranked.append({
-                "node": node,
-                "score": score.get("score", 0)
+                "node":node,
+                "score":score.get("score",0)
             })
 
         ranked.sort(
-            key=lambda x: x["score"],
+            key=lambda x:x["score"],
             reverse=True
         )
 
         return ranked
 
 
-    def choose(self, nodes):
-        ranked = self.rank_nodes(nodes)
+    def choose(self,nodes):
 
-        skipped = []
-        usable = []
-
-        for item in ranked:
-            # 预留完整IP冷却检查
-            # 当前需要由ip_history绑定full_ip后启用
-            usable.append(item)
+        ranked=self.rank_nodes(nodes)
 
         return {
-            "selected": usable[0] if usable else None,
-            "usable": usable,
-            "skipped": skipped
+            "selected": ranked[0] if ranked else None,
+            "usable": ranked,
+            "skipped":[]
         }

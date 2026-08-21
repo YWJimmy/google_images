@@ -1,10 +1,13 @@
-"""
-v3.2 IP执行层
 
-特点：
-- 不固定GLOBAL
-- 自动寻找出口Selector
-- 保留失败记录
+"""
+IP执行层
+
+职责:
+- 获取候选节点
+- 使用决策层排序
+- 执行Clash切换
+- 更新节点评分
+
 """
 
 from .clash_route_detector import ClashRouteDetector
@@ -13,7 +16,8 @@ from .clash_controller import proxy_egress_identity
 
 class ClashIpRotator:
 
-    def __init__(self, endpoint, secret, proxy_url):
+    def __init__(self, endpoint, secret, proxy_url,
+                 decision_engine=None):
         from .clash_controller import ClashController
 
         self.controller = ClashController(
@@ -26,6 +30,9 @@ class ClashIpRotator:
             self.controller,
             proxy_url
         )
+
+        self.decision_engine = decision_engine
+
 
     def current(self):
         group = self.detector.find_active_group()
@@ -40,7 +47,9 @@ class ClashIpRotator:
             "ip": ip
         }
 
+
     def rotate(self, group=None, wait_after_switch=3):
+
         attempts = []
 
         if group is None:
@@ -49,24 +58,53 @@ class ClashIpRotator:
             if not detected:
                 return {
                     "ok": False,
-                    "error_code":
-                    "NO_ACTIVE_GROUP"
+                    "error_code":"NO_ACTIVE_GROUP"
                 }
 
             group = detected["group"]
+
 
         old = proxy_egress_identity(
             self.proxy_url
         )
 
+
         nodes = self.controller.get_real_nodes_v21(
             group
         )
 
+
+        # v3.7: 接入节点决策层
+        if self.decision_engine:
+            decision = self.decision_engine.choose(nodes)
+
+            selected = decision.get("selected")
+
+            if selected:
+                ordered = [
+                    selected["node"]
+                ]
+
+                for item in decision.get("usable", []):
+                    if item["node"] not in ordered:
+                        ordered.append(item["node"])
+
+                nodes = ordered
+
+            else:
+                nodes = []
+
+
         for node in nodes:
-            name = node["clash_name"]
+
+            name = (
+                node["clash_name"]
+                if isinstance(node, dict)
+                else node
+            )
 
             try:
+
                 switched = self.controller.switch_and_verify_v21(
                     group,
                     name,
@@ -75,42 +113,59 @@ class ClashIpRotator:
 
                 if not switched.get("ok"):
                     attempts.append({
-                        "node": name,
-                        "reason": "switch_failed"
+                        "node":name,
+                        "reason":"switch_failed"
                     })
                     continue
+
 
                 new = proxy_egress_identity(
                     self.proxy_url
                 )
 
+
                 if new.get("ip_fingerprint") != old.get(
                     "ip_fingerprint"
                 ):
+
+                    if self.decision_engine:
+                        self.decision_engine.score_store.record_success(
+                            name,
+                            new.get("latency_ms")
+                        )
+
                     return {
-                        "ok": True,
-                        "group": group,
-                        "node": name,
-                        "old_ip": old,
-                        "new_ip": new,
-                        "attempts": attempts
+                        "ok":True,
+                        "group":group,
+                        "node":name,
+                        "old_ip":old,
+                        "new_ip":new,
+                        "attempts":attempts
                     }
 
+
                 attempts.append({
-                    "node": name,
-                    "reason": "same_egress"
+                    "node":name,
+                    "reason":"same_egress"
                 })
+
 
             except Exception as e:
+
                 attempts.append({
-                    "node": name,
-                    "reason": str(e)
+                    "node":name,
+                    "reason":str(e)
                 })
 
+                if self.decision_engine:
+                    self.decision_engine.score_store.record_fail(
+                        name
+                    )
+
+
         return {
-            "ok": False,
-            "error_code":
-            "ALL_NODE_FAILED",
-            "group": group,
-            "attempts": attempts
+            "ok":False,
+            "error_code":"ALL_NODE_FAILED",
+            "group":group,
+            "attempts":attempts
         }
