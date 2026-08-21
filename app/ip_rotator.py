@@ -1,171 +1,116 @@
-
 """
-ip_rotator.py v3.1
+v3.2 IP执行层
 
-IP执行层：
-- 调用 ClashController
-- 执行节点切换
-- 验证出口IP
-
-v3.1改进：
-1. 单节点失败不会导致程序停止
-2. 记录每次尝试状态
-3. 所有节点失败后统一返回错误
-4. 增加切换稳定等待
+特点：
+- 不固定GLOBAL
+- 自动寻找出口Selector
+- 保留失败记录
 """
 
-from __future__ import annotations
-
-import time
-
-from .clash_controller import (
-    ClashController,
-    proxy_egress_identity,
-)
+from .clash_route_detector import ClashRouteDetector
+from .clash_controller import proxy_egress_identity
 
 
 class ClashIpRotator:
 
-    def __init__(
-        self,
-        endpoint,
-        secret,
-        proxy_url,
-    ):
+    def __init__(self, endpoint, secret, proxy_url):
+        from .clash_controller import ClashController
+
         self.controller = ClashController(
             endpoint,
             secret
         )
         self.proxy_url = proxy_url
 
+        self.detector = ClashRouteDetector(
+            self.controller,
+            proxy_url
+        )
 
-    def current(self, group="GLOBAL"):
-        """
-        获取当前节点和出口IP。
+    def current(self):
+        group = self.detector.find_active_group()
 
-        任何检测失败均返回状态，
-        不直接抛出异常。
-        """
+        ip = proxy_egress_identity(
+            self.proxy_url
+        )
 
-        try:
-            node = self.controller.get_current_node_v21(
-                group
-            )
+        return {
+            "ok": ip.get("ok"),
+            "group": group,
+            "ip": ip
+        }
 
-            ip = proxy_egress_identity(
-                self.proxy_url
-            )
-
-            return {
-                "ok": bool(ip.get("ok")),
-                "node": node,
-                **ip,
-            }
-
-        except Exception as e:
-
-            return {
-                "ok": False,
-                "error_code":
-                    "EGRESS_CHECK_FAILED",
-                "reason": str(e),
-            }
-
-
-    def rotate(
-        self,
-        group="GLOBAL",
-        wait_after_switch=3,
-        **kwargs
-    ):
-
+    def rotate(self, group=None, wait_after_switch=3):
         attempts = []
 
-        old = self.current(group)
+        if group is None:
+            detected = self.detector.find_active_group()
+
+            if not detected:
+                return {
+                    "ok": False,
+                    "error_code":
+                    "NO_ACTIVE_GROUP"
+                }
+
+            group = detected["group"]
+
+        old = proxy_egress_identity(
+            self.proxy_url
+        )
 
         nodes = self.controller.get_real_nodes_v21(
             group
         )
 
         for node in nodes:
-
             name = node["clash_name"]
 
-            attempt = {
-                "node": name,
-                "type": node.get("type"),
-            }
-
             try:
-
-                switched = (
-                    self.controller
-                    .switch_and_verify_v21(
-                        group,
-                        name,
-                        wait=wait_after_switch
-                    )
+                switched = self.controller.switch_and_verify_v21(
+                    group,
+                    name,
+                    wait=wait_after_switch
                 )
 
                 if not switched.get("ok"):
-
-                    attempt["reason"] = (
-                        "switch_not_confirmed"
-                    )
-                    attempts.append(attempt)
+                    attempts.append({
+                        "node": name,
+                        "reason": "switch_failed"
+                    })
                     continue
 
-
-                new = self.current(group)
-
-
-                if not new.get("ok"):
-
-                    attempt["reason"] = (
-                        "egress_check_failed"
-                    )
-                    attempts.append(attempt)
-                    continue
-
-
-                attempt["masked_ip"] = (
-                    new.get("masked_ip")
+                new = proxy_egress_identity(
+                    self.proxy_url
                 )
 
-
-                attempts.append(attempt)
-
-
-                if (
-                    old.get("ip_fingerprint")
-                    != new.get("ip_fingerprint")
+                if new.get("ip_fingerprint") != old.get(
+                    "ip_fingerprint"
                 ):
-
                     return {
                         "ok": True,
-                        "old": old,
-                        "new": new,
+                        "group": group,
                         "node": name,
-                        "attempts": attempts,
+                        "old_ip": old,
+                        "new_ip": new,
+                        "attempts": attempts
                     }
 
-
-                attempt["reason"] = (
-                    "same_egress"
-                )
+                attempts.append({
+                    "node": name,
+                    "reason": "same_egress"
+                })
 
             except Exception as e:
-
-                attempt["reason"] = str(e)
-
-
-            attempts.append(attempt)
-
+                attempts.append({
+                    "node": name,
+                    "reason": str(e)
+                })
 
         return {
             "ok": False,
             "error_code":
-                "ALL_NODE_FAILED",
-            "old": old,
-            "attempts": attempts,
+            "ALL_NODE_FAILED",
+            "group": group,
+            "attempts": attempts
         }
