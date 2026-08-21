@@ -1,6 +1,7 @@
-# Clash Verge 本地代理检查与手动切换操作
+# Clash Verge 本地代理检查与智能轮换操作
 
-本文记录本项目在 Windows 上使用 Clash Verge 时的检查方法。内容仅用于确认流量出口、诊断网络路径和人工选择代理节点。
+本文记录本项目在 Windows 上使用 Clash Verge 时的检查方法，包括人工选择节点和由用户
+明确确认的一次智能轮换。智能轮换不会由 Google Challenge 自动触发。
 
 > 边界：Google 出现 CAPTCHA、`unusual traffic` 或其他验证页面后，应停止当天任务并由人工检查。不要通过自动换 IP、循环换节点或重放请求来规避验证。
 
@@ -107,7 +108,16 @@ Invoke-RestMethod `
 
 这需要在 Clash Verge/Mihomo 配置层新增 listener 与独立策略组，当前控制台不会自动改写 Clash 配置。listener 应只监听 `127.0.0.1`，并在修改配置前备份和校验端口占用。
 
-## 7. 自动轮换纯网络测试
+## 7. Dashboard 智能轮换
+
+Dashboard 的“智能轮换”在用户确认后执行：IP 决策、节点切换、完整公网 IP 验证、
+失败反馈和下一个候选 fallback。全部失败时尝试恢复原节点。完整 IP 只进入
+`private/ip_intelligence.sqlite3`，页面和 API 只显示脱敏结果。
+
+该流程与 Challenge 处理相互独立：任务检测到 Challenge 后仍暂停，不会自动点击按钮，
+也不会自动继续 Google 请求。
+
+## 8. 自动轮换纯网络测试
 
 下面的独立命令只访问 Cloudflare 204 探测地址和 ipify 出口查询，不访问 Google。它先按 Mihomo 延迟选出可直接切换的节点，再逐一切换；每个节点默认采样 10 次，完成或异常退出时都会在 `finally` 中恢复原 Selector：
 
@@ -117,7 +127,7 @@ Invoke-RestMethod `
 
 可用 `--group "组名"` 指定 Selector；省略时选择候选节点最多的组。默认结果写入 Git 已忽略的 `private/network_rotation_latest.json`，其中只包含节点名、脱敏出口、延迟和成功/失败统计。`--output` 也被强制限制在 `private/` 内，防止误写入可提交目录。
 
-## 8. 隐私与仓库规则
+## 9. 隐私与仓库规则
 
 以下内容不得提交到 Git：
 

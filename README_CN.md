@@ -1,7 +1,9 @@
 # Google Images 本地排名追踪器 v1
 
 > IP 智能轮换、完整出口身份、信誉冷却及 Dashboard 使用说明见
-> [IP_INTELLIGENCE_V39.md](IP_INTELLIGENCE_V39.md)。
+> [IP Intelligence v3.9](docs/architecture/IP_INTELLIGENCE_V39.md)。完整文档索引见
+> [docs/README.md](docs/README.md)，私有数据的脱敏测试格式见
+> [PRIVATE_DATA_FORMATS_CN.md](docs/reference/PRIVATE_DATA_FORMATS_CN.md)。
 
 ## 重要边界
 
@@ -492,9 +494,10 @@ python -m app.main --config config.yaml --source-domain-test --limit 10 --test-m
 
 所有后台操作都由固定白名单映射为参数数组，不接受任意 shell 命令。一个 CDP 端点正在运行可视化排名任务时，不允许再对同一端点启动诊断、探针或其他控制任务。
 
-Clash API 密钥可只用于当前页面，也可保存到被 Git 忽略的 `private/dashboard_secrets.json`。保存时使用 Windows DPAPI 按当前用户加密，服务端接口不会把密钥回传给页面。网络控制器不会订阅 challenge 事件，也不会自动切换节点。Google 出现验证时仍暂停，由用户人工检查、决定是否手动切换并完成验证。
+Clash API 密钥可只用于当前页面，也可保存到被 Git 忽略的 `private/dashboard_secrets.json`。保存时使用 Windows DPAPI 按当前用户加密，服务端接口不会把密钥回传给页面。Google 出现验证时仍暂停且不会自动换 IP；用户可以在独立处理后明确确认一次“智能轮换”，该轮换会验证完整出口、反馈失败并有界 fallback，但不会自动处理或绕过验证。
 
-完整的页面功能、密钥位置、专用 Chrome 简化流程和故障排查见 [`CONSOLE_GUIDE_CN.md`](CONSOLE_GUIDE_CN.md)。
+完整的页面功能、密钥位置、专用 Chrome 简化流程和故障排查见
+[`CONSOLE_GUIDE_CN.md`](docs/guides/CONSOLE_GUIDE_CN.md)。
 
 每个专用 Chrome 还可绑定一个独立的本机 HTTP 代理监听端口，并在控制台显示脱敏出口 IP、可用状态和延时。多个 Chrome 需要使用不同出口时，代理软件也必须提供分别路由的本机端口；共用同一个 Clash 混合端口不会形成独立出口。验证事件只会暂停任务并标记当前出口，不会自动换 IP。
 

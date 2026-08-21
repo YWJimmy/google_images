@@ -20,7 +20,8 @@ start_dashboard_windows.bat
 
 - **状态**：显示当前专用 Chrome 是否在线、任务状态、页面状态和排名任务进度。
 - **专用 Chrome**：创建隔离 Profile，打开已有窗口，或监听另一个本机 CDP 端点。
-- **网络出口**：连接本机 Clash Verge 控制器、读取代理组、人工切换节点及查看脱敏出口。
+- **网络出口**：连接本机 Clash Verge 控制器、读取代理组、人工切换或明确确认智能轮换，并查看脱敏出口。
+- **IP Intelligence**：查看节点的脱敏公网 IP、国家、信誉、冷却状态、成功率和同出口聚类。
 - **操作中心**：运行环境校验、诊断、单图探针、来源域名样本测试、日常任务和依赖安装。
 - **排名任务**：在选中的专用 Chrome 中运行批量查询；遇到人工验证时暂停并轮询页面状态。
 
@@ -68,6 +69,7 @@ start_dashboard_windows.bat
 | 诊断日志 | `logs/diagnostics/` | `logs/` 被 Git 忽略；仍不应对外发送原始日志 |
 | 运行与验证统计 | `logs/collection_telemetry.sqlite3` | 记录运行编号、验证次数编号、样本/搜索/尝试编号、Profile、脱敏 IP、代理状态与延时；不记录关键词、域名、完整 IP、URL、Cookie 或密钥；`logs/` 被 Git 忽略 |
 | 排名数据库 | `rank_tracker.sqlite3` | `*.sqlite3` 被 Git 忽略 |
+| IP 身份数据库 | `private/ip_intelligence.sqlite3` | 保存完整公网 IP、节点映射、信誉事件和轮换日志；页面/API 只输出脱敏 IP |
 
 控制台不会把密钥显示回页面。保存成功后，输入框可以留空；本机服务会在请求 Clash 控制器时临时解密。该密文通常只有同一台 Windows 上的同一用户可以解密。重装系统、切换用户或迁移文件后可能无法恢复，请保留密钥的独立安全备份。
 
@@ -113,6 +115,10 @@ git check-ignore -v rank_tracker.sqlite3
 
 “测出口与延时”会显示脱敏 IP、请求往返延时、检查时间和可用状态。检测到 Google 验证时，对应出口会显示“该出口出现验证”，任务保持暂停。系统不会把验证事件用于自动换 IP；用户可以人工修改代理或在 Clash 控制器中人工切换，再完成验证并继续。
 
+“智能轮换”必须由用户点击并确认。它会依次执行 IP 决策、Clash 切换、完整 IP 验证、
+失败反馈和有界 fallback；成功后还会用当前 Chrome 的 CDP 网络路径核对出口。完整 IP
+只写入私有 SQLite，Dashboard 响应会递归脱敏。该按钮不会在 Challenge 后自动触发。
+
 每次仪表盘排名任务、Top-N 来源测试和正式日常采集都会建立独立运行记录。遇到 challenge 或 consent 时，验证事件从 `1` 开始编号，并保存：本次第几次验证、样本编号、实际搜索编号、该关键词的尝试次数、验证前已完成数量、Profile/Chrome、最近一次脱敏出口 IP、代理状态、延时和出口检查时间。控制台“最近人工验证记录”显示最近 50 条。
 
 IP 信息是最近一次“测出口与延时”的隐私安全快照，而不是在验证时重新请求外部 IP 服务。如果没有检查记录，数据库会保存 `unconfigured`、`unchecked` 或 `direct` 状态以及空 IP，避免误把未知出口当成已确认出口。
@@ -126,4 +132,6 @@ IP 信息是最近一次“测出口与延时”的隐私安全快照，而不�
 - **Clash 连接失败**：确认外部控制器和密钥已在 Clash Verge 中启用，地址仅使用 `127.0.0.1` 或 `localhost`。
 - **任务停止在验证页**：先确认验证已在受控的同一个 Chrome 标签页完成；必要时打开一个正常 Google 图片页，再等待下一次 10 秒轮询。
 
-更详细的 Clash 人工操作边界见 `CLASH_VERGE_OPERATION_CN.md`，Git 流程见 `git_guide.md`。
+更详细的 Clash 操作边界见 [Clash 操作指南](CLASH_VERGE_OPERATION_CN.md)，Git 流程见
+[Git 协作指南](git_guide.md)，私有文件的公开测试格式见
+[私有数据格式与脱敏测试契约](../reference/PRIVATE_DATA_FORMATS_CN.md)。
