@@ -51,8 +51,8 @@ class ClashIpRotator:
     def rotate(self, group=None, wait_after_switch=3, decision_engine=None):
 
         attempts = []
-        decision_info = None
-
+        engine = decision_engine or self.decision_engine
+        decision = None
 
         if group is None:
             detected = self.detector.find_active_group()
@@ -76,12 +76,9 @@ class ClashIpRotator:
         )
 
 
-        # v3.7+: 接入节点决策层
-        engine = decision_engine or self.decision_engine
-
+        # v3.7: 接入节点决策层
         if engine:
             decision = engine.choose(nodes)
-            decision_info = decision
 
             selected = decision.get("selected")
 
@@ -146,7 +143,7 @@ class ClashIpRotator:
                         "old_ip":old,
                         "new_ip":new,
                         "attempts":attempts,
-                        "decision":decision_info
+                        "decision":decision
                     }
 
 
@@ -174,5 +171,5 @@ class ClashIpRotator:
             "error_code":"ALL_NODE_FAILED",
             "group":group,
             "attempts":attempts,
-            "decision":decision_info
+            "decision":decision
         }

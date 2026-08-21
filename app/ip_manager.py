@@ -1,25 +1,20 @@
 
 """
-IP统一管理入口
+IP智能管理入口
 
-职责:
-- 管理IP轮换服务
-- 将决策引擎传递给执行层
-- 统一返回时间戳
+负责:
+- 调用IP轮换
+- 传递决策引擎
+- 统一状态返回
 """
-
 from datetime import datetime, timezone
-
 
 class IpRotationService:
 
-    def __init__(
-        self,
-        rotator,
-        decision_engine=None
-    ):
+    def __init__(self, rotator, decision_engine=None, history=None):
         self.rotator = rotator
         self.decision_engine = decision_engine
+        self.history = history
 
 
     def current(self):
@@ -27,20 +22,22 @@ class IpRotationService:
 
 
     def rotate(self, **kwargs):
-
-        if (
-            "decision_engine" not in kwargs
-            and self.decision_engine is not None
-        ):
+        if self.decision_engine and "decision_engine" not in kwargs:
             kwargs["decision_engine"] = self.decision_engine
 
-        result = self.rotator.rotate(
-            **kwargs
-        )
+        result = self.rotator.rotate(**kwargs)
 
         if isinstance(result, dict):
-            result["timestamp"] = datetime.now(
-                timezone.utc
-            ).isoformat()
+            result["timestamp"] = datetime.now(timezone.utc).isoformat()
 
         return result
+
+
+    def mark_challenge(self, ip, node=None, group=None):
+        if self.history:
+            self.history.record_ip(
+                ip,
+                node=node,
+                group=group,
+                status="challenge"
+            )

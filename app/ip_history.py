@@ -1,110 +1,87 @@
 
 """
-v3.3 IP历史池
+IP历史池
 
-职责:
-- 保存出口IP历史
-- 记录节点表现
-- 支持冷却判断
-
-默认使用本地json，后续可迁移database.py
+保存:
+- 出口IP
+- 节点关系
+- challenge冷却
 """
 
-from __future__ import annotations
-
-import json
 from pathlib import Path
+import json
 from datetime import datetime, timezone, timedelta
 
 
 class IpHistoryStore:
 
-    def __init__(self, path="private/ip_history.json"):
-        self.path = Path(path)
-        self.path.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
+    def __init__(self,path="private/ip_history.json"):
+        self.path=Path(path)
+        self.path.parent.mkdir(parents=True,exist_ok=True)
         if not self.path.exists():
-            self.path.write_text(
-                json.dumps(
-                    {
-                        "ips": {},
-                        "nodes": {}
-                    },
-                    ensure_ascii=False,
-                    indent=2
-                ),
-                encoding="utf-8"
-            )
+            self._save({"ips":{},"nodes":{}})
 
 
     def _load(self):
-        return json.loads(
-            self.path.read_text(
-                encoding="utf-8"
-            )
-        )
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"ips":{},"nodes":{}}
 
 
-    def _save(self, data):
+    def _save(self,data):
         self.path.write_text(
-            json.dumps(
-                data,
-                ensure_ascii=False,
-                indent=2
-            ),
+            json.dumps(data,ensure_ascii=False,indent=2),
             encoding="utf-8"
         )
 
 
-    def record_ip(
-        self,
-        ip,
-        node=None,
-        group=None,
-        status="ok"
-    ):
+    def record_ip(self, ip, node=None, group=None,
+                  status="ok", subnet=None):
 
-        data = self._load()
+        data=self._load()
 
-        data["ips"][ip] = {
-            "node": node,
-            "group": group,
-            "status": status,
-            "updated":
-                datetime.now(
-                    timezone.utc
-                ).isoformat()
+        data["ips"][ip]={
+            "node":node,
+            "group":group,
+            "subnet":subnet,
+            "status":status,
+            "updated":datetime.now(timezone.utc).isoformat()
         }
+
+        if node:
+            data["nodes"][node]={
+                "ip":ip,
+                "group":group,
+                "updated":datetime.now(timezone.utc).isoformat()
+            }
 
         self._save(data)
 
 
-    def is_cooling(
-        self,
-        ip,
-        minutes=30
-    ):
+    def get_ip(self,ip):
+        return self._load()["ips"].get(ip)
 
-        data = self._load()
 
-        item = data["ips"].get(ip)
+    def is_cooling(self,ip,minutes=30):
+
+        item=self.get_ip(ip)
 
         if not item:
             return False
 
-        if item.get("status") != "challenge":
+        if item.get("status")!="challenge":
             return False
 
-        updated = datetime.fromisoformat(
-            item["updated"]
-        )
+        updated=datetime.fromisoformat(item["updated"])
 
-        return (
-            datetime.now(timezone.utc)
-            - updated
-            <
-            timedelta(minutes=minutes)
+        return datetime.now(timezone.utc)-updated < timedelta(minutes=minutes)
+
+
+    def mark_challenge(self,ip,node=None,group=None):
+        self.record_ip(
+            ip,
+            node=node,
+            group=group,
+            status="challenge"
         )
