@@ -1,4 +1,6 @@
+
 ERROR_CODES = {
+    0: "SUCCESS",
     -1: "TARGET_NOT_FOUND_IN_TOP_100",
     -2: "NETWORK_OR_NAVIGATION_ERROR",
     -3: "BROWSER_OR_PROFILE_ERROR",
@@ -9,9 +11,13 @@ ERROR_CODES = {
     -8: "UNEXPECTED_INTERNAL_ERROR",
     -9: "GOOGLE_CONSENT_REQUIRED",
     -10: "SEARCH_PARSE_TIMEOUT",
+
+    -20: "IP_ROTATION_FAILED",
+    -21: "IP_COOLDOWN",
+    -30: "CLASH_CONTROLLER_ERROR",
+    -40: "NETWORK_ERROR",
+    -50: "BROWSER_AUTOMATION_ERROR",
 }
 
-def describe(code: int) -> str:
-    if code > 0:
-        return "FOUND"
-    return ERROR_CODES.get(code, "UNKNOWN_ERROR")
+def describe(code:int)->str:
+    return ERROR_CODES.get(code,"UNKNOWN_ERROR") if code<=0 else "FOUND"
