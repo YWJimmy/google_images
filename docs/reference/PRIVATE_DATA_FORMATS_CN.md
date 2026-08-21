@@ -201,6 +201,16 @@
 }
 ```
 
+### 3.8 Clash 当前真实节点列表
+
+当前本机 Clash Controller 的 `get_real_nodes_v21("XFLTD")` 直接列表输出已保存为
+[`CLASH_REAL_NODE_LIST_CURRENT.json`](CLASH_REAL_NODE_LIST_CURRENT.json)。采集时 `GLOBAL`
+和 `XFLTD` 得到相同的真实出口集合，因此只保留一份，避免重复。
+
+该 JSON 保留 Controller 返回的原始 `clash_name` 和 `type`，用于节点名包含国旗 Emoji、
+中文、空格及 `[D]`/`[V]` 后缀时的解析和决策测试。文件不包含 API 密钥、服务器地址、
+端口、订阅 URL 或完整公网 IP。Clash 配置变化后应重新采集并整体替换，不手工改名。
+
 ## 4. YAML 与 CSV 格式
 
 ### 4.1 `config.yaml`

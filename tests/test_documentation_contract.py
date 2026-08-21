@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import re
 
 from app.collection_telemetry import SCHEMA as TELEMETRY_SCHEMA
@@ -62,3 +63,12 @@ def test_root_has_no_scattered_version_or_fix_notes():
         )
     ]
     assert forbidden == []
+
+
+def test_published_clash_node_list_is_valid_direct_output():
+    path = DOC_ROOT / "reference" / "CLASH_REAL_NODE_LIST_CURRENT.json"
+    nodes = json.loads(path.read_text(encoding="utf-8"))
+    assert len(nodes) == 58
+    assert all(set(item) == {"clash_name", "type"} for item in nodes)
+    assert len({item["clash_name"] for item in nodes}) == len(nodes)
+    assert {item["type"] for item in nodes} == {"AnyTLS", "Vless"}

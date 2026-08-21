@@ -9,6 +9,7 @@
 - [Clash Verge、出口检查与智能轮换](guides/CLASH_VERGE_OPERATION_CN.md)
 - [IP Intelligence Layer v3.9 架构](architecture/IP_INTELLIGENCE_V39.md)
 - [私有数据格式与脱敏测试契约](reference/PRIVATE_DATA_FORMATS_CN.md)
+- [当前 Clash 真实节点列表 JSON](reference/CLASH_REAL_NODE_LIST_CURRENT.json)
 - [Git 协作与提交](guides/git_guide.md)
 
 ## 目录约定
@@ -27,4 +28,3 @@
 3. 私有数据只能公开结构、字段和虚构示例；禁止复制真实文件内容。
 4. 示例 IP 使用 RFC 5737/3849 文档地址，密钥、Cookie 和节点名称使用明显的假值。
 5. 历史文档与当前实现冲突时，以当前代码、测试和非 `archive/` 文档为准。
-
