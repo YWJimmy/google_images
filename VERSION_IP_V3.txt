@@ -1,0 +1,12 @@
+IP Architecture V3
+
+Changes:
+- Introduced IP service layer.
+- Clash remains low-level controller.
+- current_chrome_ip remains diagnostic CLI.
+- Future runner integration should call IpRotationService.
+
+Validation:
+1. Clash node discovery
+2. Selector switch verification
+3. Proxy egress verification
