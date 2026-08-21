@@ -1,11 +1,12 @@
 
 """
-IP决策层
+IP智能决策层
 
 功能:
-- 节点评分排序
-- 风险节点过滤接口
-- 输出完整决策信息
+- 节点评分
+- IP历史风险过滤
+- challenge冷却过滤
+- same egress风险过滤
 """
 
 class IpDecisionEngine:
@@ -16,39 +17,78 @@ class IpDecisionEngine:
 
 
     def rank_nodes(self, nodes):
-        ranked = []
+        ranked=[]
 
         for node in nodes:
-            name = node["clash_name"]
-
-            score = self.score_store.get_score(name)
+            name=node["clash_name"]
+            score=self.score_store.get_score(name)
 
             ranked.append({
-                "node": node,
-                "score": score.get("score", 0)
+                "node":node,
+                "score":score.get("score",0)
             })
 
         ranked.sort(
-            key=lambda x: x["score"],
+            key=lambda x:x["score"],
             reverse=True
         )
 
         return ranked
 
 
-    def choose(self, nodes):
-        ranked = self.rank_nodes(nodes)
+    def _get_node_status(self, node):
 
-        usable = []
-        skipped = []
+        if not hasattr(self.history, "_load"):
+            return None
+
+        data=self.history._load()
+
+        # 优先读取节点索引
+        node_info=data.get("nodes",{}).get(node)
+
+        if node_info and node_info.get("status"):
+            return node_info.get("status")
+
+        # 兼容旧数据: 从IP记录反查节点
+        for _, item in data.get("ips",{}).items():
+
+            if item.get("node")==node:
+                return item.get("status")
+
+        return None
+
+
+    def choose(self, nodes):
+
+        ranked=self.rank_nodes(nodes)
+
+        usable=[]
+        skipped=[]
 
         for item in ranked:
-            # 保留接口。
-            # 后续full_ip绑定后，在这里过滤cooldown IP。
+
+            node=item["node"]["clash_name"]
+
+            status=self._get_node_status(node)
+
+            if status=="challenge":
+                skipped.append({
+                    "node":node,
+                    "reason":"ip_cooling"
+                })
+                continue
+
+            if status=="same_egress":
+                skipped.append({
+                    "node":node,
+                    "reason":"same_egress"
+                })
+                continue
+
             usable.append(item)
 
         return {
-            "selected": usable[0] if usable else None,
-            "usable": usable,
-            "skipped": skipped
+            "selected":usable[0] if usable else None,
+            "usable":usable,
+            "skipped":skipped
         }

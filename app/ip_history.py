@@ -53,6 +53,7 @@ class IpHistoryStore:
             data["nodes"][node]={
                 "ip":ip,
                 "group":group,
+                "status":status,
                 "updated":datetime.now(timezone.utc).isoformat()
             }
 
@@ -85,3 +86,28 @@ class IpHistoryStore:
             group=group,
             status="challenge"
         )
+
+
+    def mark_same_egress(self, ip, node=None, group=None):
+        """
+        记录出口重复风险。
+        用于后续决策层降低节点优先级。
+        """
+        data = self._load()
+
+        data["ips"][ip] = {
+            "node": node,
+            "group": group,
+            "status": "same_egress",
+            "updated": datetime.now(timezone.utc).isoformat()
+        }
+
+        if node:
+            data["nodes"][node] = {
+                "ip": ip,
+                "group": group,
+                "status": "same_egress",
+                "updated": datetime.now(timezone.utc).isoformat()
+            }
+
+        self._save(data)
