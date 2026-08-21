@@ -2,11 +2,10 @@
 """
 IP决策层
 
-根据:
-- 节点评分
-- IP历史
-
-生成候选顺序。
+功能:
+- 节点评分排序
+- 风险节点过滤接口
+- 输出完整决策信息
 """
 
 class IpDecisionEngine:
@@ -17,33 +16,39 @@ class IpDecisionEngine:
 
 
     def rank_nodes(self, nodes):
-
-        ranked=[]
+        ranked = []
 
         for node in nodes:
-            name=node["clash_name"]
+            name = node["clash_name"]
 
-            score=self.score_store.get_score(name)
+            score = self.score_store.get_score(name)
 
             ranked.append({
-                "node":node,
-                "score":score.get("score",0)
+                "node": node,
+                "score": score.get("score", 0)
             })
 
         ranked.sort(
-            key=lambda x:x["score"],
+            key=lambda x: x["score"],
             reverse=True
         )
 
         return ranked
 
 
-    def choose(self,nodes):
+    def choose(self, nodes):
+        ranked = self.rank_nodes(nodes)
 
-        ranked=self.rank_nodes(nodes)
+        usable = []
+        skipped = []
+
+        for item in ranked:
+            # 保留接口。
+            # 后续full_ip绑定后，在这里过滤cooldown IP。
+            usable.append(item)
 
         return {
-            "selected": ranked[0] if ranked else None,
-            "usable": ranked,
-            "skipped":[]
+            "selected": usable[0] if usable else None,
+            "usable": usable,
+            "skipped": skipped
         }
