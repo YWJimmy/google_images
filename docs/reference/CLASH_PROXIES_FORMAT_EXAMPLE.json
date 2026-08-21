@@ -1,0 +1,185 @@
+{
+  "proxies": {
+    "GLOBAL": {
+      "alive": true,
+      "all": [
+        "DIRECT",
+        "REJECT",
+        "🇭🇰 Test Hong Kong 01 [D]",
+        "🇸🇬 Test Singapore 01 [V]",
+        "XFLTD",
+        "自动选择",
+        "故障转移"
+      ],
+      "dialer-proxy": "",
+      "emptyFallback": "COMPATIBLE",
+      "extra": {},
+      "hidden": false,
+      "history": [],
+      "icon": "",
+      "interface": "",
+      "mptcp": false,
+      "name": "GLOBAL",
+      "now": "DIRECT",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "testUrl": "",
+      "tfo": false,
+      "type": "Selector",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "XFLTD": {
+      "alive": true,
+      "all": [
+        "自动选择",
+        "故障转移",
+        "🇭🇰 Test Hong Kong 01 [D]",
+        "🇸🇬 Test Singapore 01 [V]"
+      ],
+      "dialer-proxy": "",
+      "emptyFallback": "COMPATIBLE",
+      "extra": {},
+      "hidden": false,
+      "history": [],
+      "icon": "",
+      "interface": "",
+      "mptcp": false,
+      "name": "XFLTD",
+      "now": "自动选择",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "testUrl": "",
+      "tfo": false,
+      "type": "Selector",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "自动选择": {
+      "alive": true,
+      "all": [
+        "🇭🇰 Test Hong Kong 01 [D]",
+        "🇸🇬 Test Singapore 01 [V]"
+      ],
+      "dialer-proxy": "",
+      "emptyFallback": "COMPATIBLE",
+      "expectedStatus": "*",
+      "extra": {},
+      "fixed": "",
+      "hidden": false,
+      "history": [],
+      "icon": "",
+      "interface": "",
+      "mptcp": false,
+      "name": "自动选择",
+      "now": "🇭🇰 Test Hong Kong 01 [D]",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "testUrl": "https://probe.example.test/generate_204",
+      "tfo": false,
+      "type": "URLTest",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "故障转移": {
+      "alive": true,
+      "all": [
+        "🇭🇰 Test Hong Kong 01 [D]",
+        "🇸🇬 Test Singapore 01 [V]"
+      ],
+      "dialer-proxy": "",
+      "emptyFallback": "COMPATIBLE",
+      "expectedStatus": "*",
+      "extra": {},
+      "fixed": "",
+      "hidden": false,
+      "history": [],
+      "icon": "",
+      "interface": "",
+      "mptcp": false,
+      "name": "故障转移",
+      "now": "🇭🇰 Test Hong Kong 01 [D]",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "testUrl": "https://probe.example.test/generate_204",
+      "tfo": false,
+      "type": "Fallback",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "🇭🇰 Test Hong Kong 01 [D]": {
+      "alive": true,
+      "dialer-proxy": "",
+      "extra": {
+        "https://probe.example.test/generate_204": {
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-01-01T00:00:00+00:00",
+              "delay": 42
+            }
+          ]
+        }
+      },
+      "history": [
+        {
+          "time": "2026-01-01T00:00:00+00:00",
+          "delay": 42
+        }
+      ],
+      "id": "00000000-0000-4000-8000-000000000011",
+      "interface": "",
+      "mptcp": false,
+      "name": "🇭🇰 Test Hong Kong 01 [D]",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "tfo": false,
+      "type": "AnyTLS",
+      "udp": true,
+      "uot": true,
+      "xudp": false
+    },
+    "🇸🇬 Test Singapore 01 [V]": {
+      "alive": true,
+      "dialer-proxy": "",
+      "extra": {
+        "https://probe.example.test/generate_204": {
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-01-01T00:00:00+00:00",
+              "delay": 68
+            }
+          ]
+        }
+      },
+      "history": [
+        {
+          "time": "2026-01-01T00:00:00+00:00",
+          "delay": 68
+        }
+      ],
+      "id": "00000000-0000-4000-8000-000000000012",
+      "interface": "",
+      "mptcp": false,
+      "name": "🇸🇬 Test Singapore 01 [V]",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "tfo": false,
+      "type": "Vless",
+      "udp": true,
+      "uot": true,
+      "xudp": true
+    }
+  }
+}

@@ -11,6 +11,8 @@
 - [私有数据格式与脱敏测试契约](reference/PRIVATE_DATA_FORMATS_CN.md)
 - [当前 Clash 真实节点列表 JSON](reference/CLASH_REAL_NODE_LIST_CURRENT.json)
 - [当前 Clash Selector 大类列表 JSON](reference/CLASH_SELECTOR_LIST_CURRENT.json)
+- [`all_proxies.json` 脱敏格式样例](reference/ALL_PROXIES_FORMAT_EXAMPLE.json)
+- [`clash_proxies.json` 脱敏格式样例](reference/CLASH_PROXIES_FORMAT_EXAMPLE.json)
 - [Git 协作与提交](guides/git_guide.md)
 
 ## 目录约定

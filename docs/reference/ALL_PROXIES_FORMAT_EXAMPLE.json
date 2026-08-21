@@ -1,0 +1,203 @@
+{
+  "proxies": {
+    "DIRECT": {
+      "alive": true,
+      "dialer-proxy": "",
+      "extra": {},
+      "history": [],
+      "id": "00000000-0000-4000-8000-000000000001",
+      "interface": "",
+      "mptcp": false,
+      "name": "DIRECT",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "tfo": false,
+      "type": "Direct",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "GLOBAL": {
+      "alive": true,
+      "all": [
+        "DIRECT",
+        "REJECT",
+        "Test Node A",
+        "Test Node B",
+        "happy猫",
+        "自动选择",
+        "故障转移"
+      ],
+      "dialer-proxy": "",
+      "emptyFallback": "COMPATIBLE",
+      "extra": {},
+      "hidden": false,
+      "history": [],
+      "icon": "",
+      "interface": "",
+      "mptcp": false,
+      "name": "GLOBAL",
+      "now": "DIRECT",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "testUrl": "",
+      "tfo": false,
+      "type": "Selector",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "happy猫": {
+      "alive": true,
+      "all": [
+        "自动选择",
+        "故障转移",
+        "Test Node A",
+        "Test Node B"
+      ],
+      "dialer-proxy": "",
+      "emptyFallback": "COMPATIBLE",
+      "extra": {},
+      "hidden": false,
+      "history": [],
+      "icon": "",
+      "interface": "",
+      "mptcp": false,
+      "name": "happy猫",
+      "now": "自动选择",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "testUrl": "",
+      "tfo": false,
+      "type": "Selector",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "自动选择": {
+      "alive": true,
+      "all": [
+        "Test Node A",
+        "Test Node B"
+      ],
+      "dialer-proxy": "",
+      "emptyFallback": "COMPATIBLE",
+      "expectedStatus": "*",
+      "extra": {},
+      "fixed": "",
+      "hidden": false,
+      "history": [],
+      "icon": "",
+      "interface": "",
+      "mptcp": false,
+      "name": "自动选择",
+      "now": "Test Node A",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "testUrl": "https://probe.example.test/generate_204",
+      "tfo": false,
+      "type": "URLTest",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "故障转移": {
+      "alive": true,
+      "all": [
+        "Test Node A",
+        "Test Node B"
+      ],
+      "dialer-proxy": "",
+      "emptyFallback": "COMPATIBLE",
+      "expectedStatus": "*",
+      "extra": {},
+      "fixed": "",
+      "hidden": false,
+      "history": [],
+      "icon": "",
+      "interface": "",
+      "mptcp": false,
+      "name": "故障转移",
+      "now": "Test Node A",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "testUrl": "https://probe.example.test/generate_204",
+      "tfo": false,
+      "type": "Fallback",
+      "udp": true,
+      "uot": false,
+      "xudp": false
+    },
+    "Test Node A": {
+      "alive": true,
+      "dialer-proxy": "",
+      "extra": {
+        "https://probe.example.test/generate_204": {
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-01-01T00:00:00+00:00",
+              "delay": 42
+            }
+          ]
+        }
+      },
+      "history": [
+        {
+          "time": "2026-01-01T00:00:00+00:00",
+          "delay": 42
+        }
+      ],
+      "id": "00000000-0000-4000-8000-000000000002",
+      "interface": "",
+      "mptcp": false,
+      "name": "Test Node A",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "tfo": false,
+      "type": "AnyTLS",
+      "udp": true,
+      "uot": true,
+      "xudp": false
+    },
+    "Test Node B": {
+      "alive": false,
+      "dialer-proxy": "",
+      "extra": {
+        "https://probe.example.test/generate_204": {
+          "alive": false,
+          "history": [
+            {
+              "time": "2026-01-01T00:00:00+00:00",
+              "delay": 0
+            }
+          ]
+        }
+      },
+      "history": [
+        {
+          "time": "2026-01-01T00:00:00+00:00",
+          "delay": 0
+        }
+      ],
+      "id": "00000000-0000-4000-8000-000000000003",
+      "interface": "",
+      "mptcp": false,
+      "name": "Test Node B",
+      "provider-name": "",
+      "routing-mark": 0,
+      "smux": false,
+      "tfo": false,
+      "type": "AnyTLS",
+      "udp": true,
+      "uot": true,
+      "xudp": false
+    }
+  }
+}

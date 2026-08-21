@@ -86,3 +86,34 @@ def test_published_clash_selector_list_contains_nested_categories():
     xfltd_choices = selectors[1]["choices"]
     assert {"DIRECT", "REJECT", "XFLTD", "自动选择", "故障转移"} <= set(global_choices)
     assert xfltd_choices[:2] == ["自动选择", "故障转移"]
+
+
+def test_published_all_proxies_example_preserves_raw_response_shape():
+    path = DOC_ROOT / "reference" / "ALL_PROXIES_FORMAT_EXAMPLE.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    proxies = document["proxies"]
+    assert set(document) == {"proxies"}
+    assert {"GLOBAL", "happy猫", "自动选择", "故障转移"} <= set(proxies)
+    assert proxies["GLOBAL"]["type"] == "Selector"
+    assert proxies["自动选择"]["type"] == "URLTest"
+    assert proxies["故障转移"]["type"] == "Fallback"
+    assert {item["type"] for item in proxies.values()} >= {"Direct", "AnyTLS"}
+    assert all(name == item["name"] for name, item in proxies.items())
+
+
+def test_published_clash_proxies_example_covers_xfltd_and_node_protocols():
+    path = DOC_ROOT / "reference" / "CLASH_PROXIES_FORMAT_EXAMPLE.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    proxies = document["proxies"]
+    assert set(document) == {"proxies"}
+    assert {"GLOBAL", "XFLTD", "自动选择", "故障转移"} <= set(proxies)
+    assert proxies["XFLTD"]["type"] == "Selector"
+    assert proxies["XFLTD"]["all"][:2] == ["自动选择", "故障转移"]
+    assert {item["type"] for item in proxies.values()} >= {
+        "Selector",
+        "URLTest",
+        "Fallback",
+        "AnyTLS",
+        "Vless",
+    }
+    assert all(name == item["name"] for name, item in proxies.items())

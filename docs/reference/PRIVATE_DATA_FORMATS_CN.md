@@ -224,6 +224,35 @@
 该文件用于测试“大类/嵌套代理组不能被误当成真实出口节点”。它是运行状态快照，
 `current` 和 `current_leaf` 会随 Clash 自动选择或人工切换而变化。
 
+### 3.10 `all_proxies.json` 与 `clash_proxies.json`
+
+这两份私有文件都是 Clash/Mihomo `/proxies` 接口的原始响应，顶层结构相同：
+
+```json
+{
+  "proxies": {
+    "代理或策略组名称": {
+      "name": "代理或策略组名称",
+      "type": "Selector | URLTest | Fallback | AnyTLS | Vless | ...",
+      "alive": true
+    }
+  }
+}
+```
+
+公开、可直接载入测试的脱敏样例分别是：
+
+- [`ALL_PROXIES_FORMAT_EXAMPLE.json`](ALL_PROXIES_FORMAT_EXAMPLE.json)：对应私有
+  `private/all_proxies.json`，保留 `GLOBAL`、业务 Selector、`自动选择`、`故障转移`、
+  `AnyTLS` 节点，以及 `all`、`now`、`history`、`extra` 等原始层级；
+- [`CLASH_PROXIES_FORMAT_EXAMPLE.json`](CLASH_PROXIES_FORMAT_EXAMPLE.json)：对应私有
+  `private/clash_proxies.json`，保留 `GLOBAL`、`XFLTD`、`自动选择`、`故障转移`，并同时
+  提供 `[D]`/`AnyTLS` 与 `[V]`/`Vless` 节点。
+
+样例保持源文件的字段名称、值类型和嵌套关系，但仅选取能覆盖解析分支的代表对象。
+UUID、实时测速时间、延迟、流量/到期提示和真实节点名称均替换为固定测试值；因此测试
+不得把样例中的 `alive`、`now`、`delay` 当作当前 Clash 运行状态。
+
 ## 4. YAML 与 CSV 格式
 
 ### 4.1 `config.yaml`
