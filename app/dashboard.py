@@ -35,7 +35,15 @@ from .clash_controller import (
     validate_secret,
 )
 from .secret_store import DashboardSecretStore
+from .database import IpIntelligenceDatabase
 from .error_codes import describe
+from .ip_decision import IpDecisionEngine
+from .ip_history import IpHistoryStore
+from .ip_identity import IpIdentityService
+from .ip_reputation import IpReputationService
+from .ip_rotator import ClashIpRotator
+from .ip_verifier import ChromeIpVerifier
+from .node_score import NodeScoreStore
 from .google_images import (
     BrowserLaunchError,
     ChallengeDetected,
@@ -145,6 +153,7 @@ class ChromeSlot:
         self.verification_count = 0
         self._previous_search_started: float | None = None
         self.clash_context_provider = None
+        self.ip_challenge_recorder = None
 
     @property
 # 功能：active 函数，负责当前模块中的一项具体处理逻辑。
@@ -408,6 +417,16 @@ class ChromeSlot:
                                 )
                             except Exception as telemetry_exc:
                                 self.telemetry_error = type(telemetry_exc).__name__
+                        if waiting_state == "challenge" and callable(self.ip_challenge_recorder):
+                            try:
+                                clash_context = (
+                                    self.clash_context_provider()
+                                    if callable(self.clash_context_provider)
+                                    else {}
+                                )
+                                self.ip_challenge_recorder(clash_context.get("clash_node"))
+                            except Exception as reputation_exc:
+                                self.telemetry_error = type(reputation_exc).__name__
                         self._set_task(
                             index,
                             status="waiting_for_human",
@@ -802,6 +821,14 @@ class DashboardManager:
         self.operations = OperationManager(self.root, self.config_path)
         self.profile_manager = DedicatedChromeProfiles(self.root)
         self.secret_store = DashboardSecretStore(self.root / "private" / "dashboard_secrets.json")
+        self.ip_database = IpIntelligenceDatabase(
+            self.root / "private" / "ip_intelligence.sqlite3"
+        )
+        self.ip_reputation = IpReputationService(self.ip_database)
+        self.ip_identity_service = IpIdentityService(
+            self.ip_database, self.ip_reputation
+        )
+        self.ip_rotation_lock = threading.Lock()
         self._load_registry()
         self.monitor = threading.Thread(target=self._monitor, daemon=True)
         self.monitor.start()
@@ -820,6 +847,7 @@ class DashboardManager:
             try:
                 slot = ChromeSlot(str(entry["id"]), str(entry["label"]), str(entry["endpoint"]), self.cfg)
                 slot.clash_context_provider = self.live_clash_context
+                slot.ip_challenge_recorder = self.record_node_challenge
                 self.slots[slot.id] = slot
             except Exception:
                 continue
@@ -851,6 +879,7 @@ class DashboardManager:
             slot_id = "chrome-" + uuid.uuid4().hex[:8]
             slot = ChromeSlot(slot_id, label.strip() or endpoint, endpoint, self.cfg)
             slot.clash_context_provider = self.live_clash_context
+            slot.ip_challenge_recorder = self.record_node_challenge
             self.slots[slot_id] = slot
             self._save_registry()
             slot.probe()
@@ -1127,7 +1156,72 @@ class DashboardManager:
                 latest_by_node[node] = str(event.get("occurred_at") or "")
         for item in result["nodes"]:
             item["last_verification_at"] = latest_by_node.get(str(item["name"]))
+        intelligence_service = getattr(self, "ip_identity_service", None)
+        intelligence = {
+            item["node"]: item for item in intelligence_service.dashboard_rows()
+        } if intelligence_service is not None else {}
+        for item in result["nodes"]:
+            details = intelligence.get(str(item["name"]), {})
+            item.update({
+                "masked_ip": details.get("masked_ip"),
+                "country": details.get("country"),
+                "ip_status": details.get("status", "UNKNOWN"),
+                "ip_score": details.get("ip_score"),
+                "shared_egress": bool(details.get("shared_egress", False)),
+                "challenge_count": details.get("challenge", 0),
+            })
         return result
+
+    def ip_intelligence(self) -> list[dict]:
+        service = getattr(self, "ip_identity_service", None)
+        return service.dashboard_rows() if service is not None else []
+
+    def record_node_challenge(self, node: str | None) -> None:
+        if not node:
+            return
+        database = getattr(self, "ip_database", None)
+        reputation = getattr(self, "ip_reputation", None)
+        if database is None or reputation is None:
+            return
+        identity = database.latest_ip_for_node(str(node))
+        if identity and identity.get("full_ip"):
+            reputation.mark_challenge(str(identity["full_ip"]), node=str(node))
+
+    def rotate_clash(self, endpoint: str, secret: str, proxy_url: str,
+                     group: str, cdp_endpoint: str | None = None,
+                     max_attempts: int | None = None) -> dict:
+        endpoint = validate_local_http_url(endpoint, "controller endpoint")
+        proxy_url = validate_local_http_url(proxy_url, "proxy URL")
+        if not group.strip():
+            raise ValueError("group is required")
+        if max_attempts is not None and not 1 <= max_attempts <= 100:
+            raise ValueError("max_attempts must be between 1 and 100")
+        if not self.ip_rotation_lock.acquire(blocking=False):
+            return {"ok": False, "error_code": "ROTATION_BUSY", "state": "ROTATING"}
+        try:
+            history = IpHistoryStore(self.root / "private" / "ip_history.json")
+            scores = NodeScoreStore(self.root / "private" / "node_score.json")
+            decision = IpDecisionEngine(history, scores, self.ip_identity_service)
+            rotator = ClashIpRotator(
+                endpoint, secret, proxy_url, decision_engine=decision,
+                identity_service=self.ip_identity_service,
+                database=self.ip_database,
+            )
+            result = rotator.rotate(group=group, max_attempts=max_attempts)
+            if result.get("ok"):
+                with self.lock:
+                    self.clash_context = {
+                        "clash_group": group,
+                        "clash_node": result.get("node"),
+                    }
+                expected = (result.get("new_ip") or {}).get("full_ip")
+                if cdp_endpoint:
+                    result["chrome_verification"] = ChromeIpVerifier().verify(
+                        validate_local_cdp_endpoint(cdp_endpoint), expected
+                    )
+            return result
+        finally:
+            self.ip_rotation_lock.release()
 
 
 # 类说明：DashboardHandler 封装相关业务状态和操作。
@@ -1192,6 +1286,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json(
                 {"events": self.server.manager.recent_verification_events(int(raw_limit))}
             )
+            return
+        if parts.path == "/api/ip-intelligence":
+            self._json({"nodes": self.server.manager.ip_intelligence()})
             return
         self._json({"error": "not found"}, 404)
 
@@ -1271,6 +1368,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/clash/egress":
                 self._json(masked_proxy_egress(str(payload.get("proxy_url", "http://127.0.0.1:7897"))))
+                return
+            if self.path == "/api/clash/rotate":
+                secret = self.server.manager.secret_store.clash_secret(str(payload.get("secret", "")))
+                raw_attempts = payload.get("max_attempts")
+                self._json(self.server.manager.rotate_clash(
+                    str(payload.get("endpoint", "http://127.0.0.1:9097")),
+                    secret,
+                    str(payload.get("proxy_url", "http://127.0.0.1:7897")),
+                    str(payload.get("group", "")),
+                    str(payload.get("cdp_endpoint", "")) or None,
+                    int(raw_attempts) if raw_attempts not in {None, ""} else None,
+                ))
                 return
             if self.path == "/api/settings/clash/save":
                 secret = validate_secret(str(payload.get("secret", "")))
