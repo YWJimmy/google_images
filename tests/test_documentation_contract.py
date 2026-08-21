@@ -72,3 +72,17 @@ def test_published_clash_node_list_is_valid_direct_output():
     assert all(set(item) == {"clash_name", "type"} for item in nodes)
     assert len({item["clash_name"] for item in nodes}) == len(nodes)
     assert {item["type"] for item in nodes} == {"AnyTLS", "Vless"}
+
+
+def test_published_clash_selector_list_contains_nested_categories():
+    path = DOC_ROOT / "reference" / "CLASH_SELECTOR_LIST_CURRENT.json"
+    selectors = json.loads(path.read_text(encoding="utf-8"))
+    assert [item["group"] for item in selectors] == ["GLOBAL", "XFLTD"]
+    assert all(
+        set(item) == {"group", "current", "current_leaf", "choices"}
+        for item in selectors
+    )
+    global_choices = selectors[0]["choices"]
+    xfltd_choices = selectors[1]["choices"]
+    assert {"DIRECT", "REJECT", "XFLTD", "自动选择", "故障转移"} <= set(global_choices)
+    assert xfltd_choices[:2] == ["自动选择", "故障转移"]

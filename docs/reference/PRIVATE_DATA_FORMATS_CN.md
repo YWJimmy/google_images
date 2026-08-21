@@ -211,6 +211,19 @@
 中文、空格及 `[D]`/`[V]` 后缀时的解析和决策测试。文件不包含 API 密钥、服务器地址、
 端口、订阅 URL 或完整公网 IP。Clash 配置变化后应重新采集并整体替换，不手工改名。
 
+### 3.9 Clash 当前 Selector 大类列表
+
+[`CLASH_SELECTOR_LIST_CURRENT.json`](CLASH_SELECTOR_LIST_CURRENT.json) 保存当前
+`controller.selectors()` 的直接输出，包含：
+
+- `GLOBAL` 和 `XFLTD` 两个 Selector 大类；
+- 每个大类的 `current`、最终落地节点 `current_leaf` 和完整 `choices`；
+- `DIRECT`、`REJECT`、`XFLTD`、`自动选择`、`故障转移`等非真实出口选项；
+- 所有 `[D]`/`[V]` 真实节点名。
+
+该文件用于测试“大类/嵌套代理组不能被误当成真实出口节点”。它是运行状态快照，
+`current` 和 `current_leaf` 会随 Clash 自动选择或人工切换而变化。
+
 ## 4. YAML 与 CSV 格式
 
 ### 4.1 `config.yaml`
