@@ -1180,12 +1180,22 @@ class DashboardManager:
     def observe_clash_egress(self, proxy_url: str, *, collector=None) -> dict:
         """Collect a consensus Full IP, persist its node binding, and return only public fields."""
         proxy_url = validate_local_http_url(proxy_url, "proxy URL")
+        before_context = self.live_clash_context()
         sample = (collector or FullIpCollector()).collect(proxy_url)
-        context = self.current_clash_context()
-        node = str(context.get("clash_node") or "") or None
-        group = str(context.get("clash_group") or "") or None
+        after_context = self.live_clash_context()
+        before_identity = (
+            str(before_context.get("clash_group") or ""),
+            str(before_context.get("clash_node") or ""),
+        )
+        after_identity = (
+            str(after_context.get("clash_group") or ""),
+            str(after_context.get("clash_node") or ""),
+        )
+        attribution_stable = before_identity == after_identity
+        group = after_identity[0] or None
+        node = after_identity[1] or None
         recorded = False
-        if sample.get("ok") and sample.get("full_ip") and node:
+        if sample.get("ok") and sample.get("full_ip") and node and attribution_stable:
             node_type = None
             secret_store = getattr(self, "secret_store", None)
             if secret_store is not None:
@@ -1220,6 +1230,7 @@ class DashboardManager:
             "collected_at": sample.get("collected_at"),
             "group": group,
             "node": node,
+            "attribution_stable": attribution_stable,
             "recorded": recorded,
         }
 

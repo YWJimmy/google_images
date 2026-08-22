@@ -90,11 +90,41 @@ def test_manual_egress_check_persists_current_node_without_exposing_full_ip(monk
         "collected_at": "2026-08-22T00:00:00+00:00",
         "group": "XFLTD",
         "node": "Node A",
+        "attribution_stable": True,
         "recorded": True,
     }
     assert "full_ip" not in str(result)
     assert manager.ip_database.latest_ip_for_node("Node A")["full_ip"] == "203.0.113.10"
     assert manager.ip_identity_service.dashboard_rows()[0]["type"] == "AnyTLS"
+
+
+def test_manual_egress_check_does_not_bind_when_auto_selection_changes():
+    manager = manager_with_database()
+    contexts = iter([
+        {"clash_group": "XFLTD", "clash_node": "Node A"},
+        {"clash_group": "XFLTD", "clash_node": "Node B"},
+    ])
+    manager.live_clash_context = lambda: next(contexts)
+
+    class Collector:
+        def collect(self, _proxy_url):
+            return {
+                "ok": True,
+                "full_ip": "203.0.113.10",
+                "family": "IPv4",
+                "consensus": 2,
+                "consensus_required": 2,
+                "providers_ok": 3,
+            }
+
+    result = manager.observe_clash_egress(
+        "http://127.0.0.1:7897", collector=Collector()
+    )
+    assert result["ok"] is True
+    assert result["attribution_stable"] is False
+    assert result["recorded"] is False
+    assert manager.ip_database.latest_ip_for_node("Node A") is None
+    assert manager.ip_database.latest_ip_for_node("Node B") is None
 
 
 def test_dashboard_smart_rotation_updates_context_and_checks_chrome(monkeypatch):
