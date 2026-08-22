@@ -28,6 +28,10 @@ private/ip_intelligence.sqlite3
 
 Dashboard 和 `/api/ip-intelligence` 只返回脱敏地址，不返回完整 IP。
 
+控制台“检查脱敏出口”也使用同一套三服务共识采集器。若当前 Clash 组和最终叶子已知，
+采集成功后立即追加 Node→Full IP 历史；响应只包含脱敏 IP、国家、采集时间、成功服务数
+和共识票数。`same_egress` 仍是一次有效身份观测，因此同样写入映射和出口聚类。
+
 SQLite 表：
 
 - `node_table`：节点名称、类型和国家；

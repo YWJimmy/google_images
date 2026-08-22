@@ -36,6 +36,67 @@ def test_dashboard_returns_only_masked_ip_and_challenge_cooling():
     assert rows[0]["last_challenge"]
 
 
+def test_manual_egress_check_persists_current_node_without_exposing_full_ip(monkeypatch):
+    manager = manager_with_database()
+    manager.clash_context = {"clash_group": "XFLTD", "clash_node": "Node A"}
+
+    class SecretStore:
+        def public_settings(self):
+            return {"clash_endpoint": "http://127.0.0.1:9097"}
+
+        def clash_secret(self):
+            return "secret"
+
+    class Controller:
+        def __init__(self, endpoint, secret):
+            assert (endpoint, secret) == ("http://127.0.0.1:9097", "secret")
+
+        def get_proxy_detail_v21(self, node):
+            assert node == "Node A"
+            return {"type": "AnyTLS"}
+
+    manager.secret_store = SecretStore()
+    monkeypatch.setattr("app.dashboard.ClashController", Controller)
+
+    class Collector:
+        def collect(self, proxy_url):
+            assert proxy_url == "http://127.0.0.1:7897"
+            return {
+                "ok": True,
+                "full_ip": "203.0.113.10",
+                "family": "IPv4",
+                "country": "HK",
+                "consensus": 3,
+                "consensus_required": 2,
+                "providers_ok": 3,
+                "latency_ms": 42,
+                "collected_at": "2026-08-22T00:00:00+00:00",
+                "observations": [{"provider": "private", "full_ip": "203.0.113.10"}],
+            }
+
+    result = manager.observe_clash_egress(
+        "http://127.0.0.1:7897", collector=Collector()
+    )
+    assert result == {
+        "ok": True,
+        "error_code": None,
+        "family": "IPv4",
+        "masked_ip": "203.0.xxx.xxx",
+        "country": "HK",
+        "consensus": 3,
+        "consensus_required": 2,
+        "providers_ok": 3,
+        "latency_ms": 42,
+        "collected_at": "2026-08-22T00:00:00+00:00",
+        "group": "XFLTD",
+        "node": "Node A",
+        "recorded": True,
+    }
+    assert "full_ip" not in str(result)
+    assert manager.ip_database.latest_ip_for_node("Node A")["full_ip"] == "203.0.113.10"
+    assert manager.ip_identity_service.dashboard_rows()[0]["type"] == "AnyTLS"
+
+
 def test_dashboard_smart_rotation_updates_context_and_checks_chrome(monkeypatch):
     manager = manager_with_database()
 

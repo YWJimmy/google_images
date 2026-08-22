@@ -38,7 +38,7 @@ from .secret_store import DashboardSecretStore
 from .database import IpIntelligenceDatabase
 from .error_codes import describe
 from .ip_decision import IpDecisionEngine
-from .full_ip import mask_full_ip
+from .full_ip import FullIpCollector, mask_full_ip
 from .ip_history import IpHistoryStore
 from .ip_identity import IpIdentityService
 from .ip_reputation import IpReputationService
@@ -1177,6 +1177,52 @@ class DashboardManager:
         service = getattr(self, "ip_identity_service", None)
         return service.dashboard_rows() if service is not None else []
 
+    def observe_clash_egress(self, proxy_url: str, *, collector=None) -> dict:
+        """Collect a consensus Full IP, persist its node binding, and return only public fields."""
+        proxy_url = validate_local_http_url(proxy_url, "proxy URL")
+        sample = (collector or FullIpCollector()).collect(proxy_url)
+        context = self.current_clash_context()
+        node = str(context.get("clash_node") or "") or None
+        group = str(context.get("clash_group") or "") or None
+        recorded = False
+        if sample.get("ok") and sample.get("full_ip") and node:
+            node_type = None
+            secret_store = getattr(self, "secret_store", None)
+            if secret_store is not None:
+                try:
+                    settings = secret_store.public_settings()
+                    controller = ClashController(
+                        str(settings["clash_endpoint"]), secret_store.clash_secret()
+                    )
+                    node_type = str(
+                        controller.get_proxy_detail_v21(node).get("type") or ""
+                    ) or None
+                except Exception:
+                    # Full-IP identity remains useful if topology metadata is unavailable.
+                    node_type = None
+            self.ip_identity_service.observe(
+                node,
+                str(sample["full_ip"]),
+                country=sample.get("country"),
+                node_type=node_type,
+            )
+            recorded = True
+        return {
+            "ok": bool(sample.get("ok")),
+            "error_code": sample.get("error_code"),
+            "family": sample.get("family"),
+            "masked_ip": mask_full_ip(sample.get("full_ip")),
+            "country": sample.get("country"),
+            "consensus": int(sample.get("consensus") or 0),
+            "consensus_required": int(sample.get("consensus_required") or 0),
+            "providers_ok": int(sample.get("providers_ok") or 0),
+            "latency_ms": sample.get("latency_ms"),
+            "collected_at": sample.get("collected_at"),
+            "group": group,
+            "node": node,
+            "recorded": recorded,
+        }
+
     def record_node_challenge(self, node: str | None) -> None:
         if not node:
             return
@@ -1382,7 +1428,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json(result)
                 return
             if self.path == "/api/clash/egress":
-                self._json(masked_proxy_egress(str(payload.get("proxy_url", "http://127.0.0.1:7897"))))
+                self._json(self.server.manager.observe_clash_egress(
+                    str(payload.get("proxy_url", "http://127.0.0.1:7897"))
+                ))
                 return
             if self.path == "/api/clash/rotate":
                 secret = self.server.manager.secret_store.clash_secret(str(payload.get("secret", "")))

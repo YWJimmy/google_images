@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 import ipaddress
 import json
 import time
@@ -79,6 +80,10 @@ class FullIpCollector:
             return {
                 "ok": False,
                 "error_code": "FULL_IP_UNAVAILABLE",
+                "collected_at": datetime.now(timezone.utc).isoformat(),
+                "consensus": 0,
+                "consensus_required": int(minimum_consensus or 1),
+                "providers_ok": 0,
                 "latency_ms": round((time.perf_counter() - started) * 1000),
                 "observations": observations,
             }
@@ -93,6 +98,10 @@ class FullIpCollector:
             return {
                 "ok": False,
                 "error_code": "IP_PROVIDER_MISMATCH",
+                "collected_at": datetime.now(timezone.utc).isoformat(),
+                "consensus": votes,
+                "consensus_required": required,
+                "providers_ok": len(valid),
                 "latency_ms": round((time.perf_counter() - started) * 1000),
                 "observations": observations,
             }
@@ -103,7 +112,9 @@ class FullIpCollector:
             "full_ip": full_ip,
             "family": f"IPv{ipaddress.ip_address(full_ip).version}",
             "country": country,
+            "collected_at": datetime.now(timezone.utc).isoformat(),
             "consensus": votes,
+            "consensus_required": required,
             "providers_ok": len(valid),
             "latency_ms": round((time.perf_counter() - started) * 1000),
             "observations": observations,

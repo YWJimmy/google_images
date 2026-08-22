@@ -35,7 +35,10 @@
 curl.exe --proxy http://127.0.0.1:7897 http://api.ipify.org
 ```
 
-输出属于隐私信息。排查问题时只记录“成功/失败”或脱敏后的形式，例如 `203.0.113.xxx`。
+输出属于隐私信息。排查问题时只记录“成功/失败”或脱敏后的形式，例如 `203.0.xxx.xxx`。
+控制台中的“检查脱敏出口”会改用 ipify、ifconfig.me 与 ipinfo 三服务共识；当前 Clash
+叶子已知时，会把完整 IP 仅写入 `private/ip_intelligence.sqlite3`，页面只显示脱敏结果、
+国家和共识状态。
 
 ### 验证控制器
 
