@@ -10,6 +10,8 @@ import sqlite3
 import threading
 from typing import Any
 
+from .full_ip import normalize_full_ip
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS node_table (
@@ -109,6 +111,10 @@ class IpIntelligenceDatabase:
 
     def observe_ip(self, node: str, full_ip: str, *, country: str | None = None,
                    node_type: str | None = None, observed_at: str | None = None) -> None:
+        node = node.strip()
+        if not node:
+            raise ValueError("node is required")
+        full_ip = normalize_full_ip(full_ip)
         timestamp = observed_at or utc_now()
         self.upsert_node(node, node_type, country)
         with self._lock, closing(self._connect()) as conn, conn:
@@ -130,6 +136,9 @@ class IpIntelligenceDatabase:
                      occurred_at: str | None = None) -> None:
         timestamp = occurred_at or utc_now()
         normalized = event_type.strip().lower()
+        if not normalized:
+            raise ValueError("event_type is required")
+        full_ip = normalize_full_ip(full_ip) if full_ip else None
         with self._lock, closing(self._connect()) as conn, conn:
             if full_ip:
                 conn.execute(
@@ -157,6 +166,7 @@ class IpIntelligenceDatabase:
 
     def set_ip_state(self, full_ip: str, status: str,
                      cooling_until: str | None = None) -> None:
+        full_ip = normalize_full_ip(full_ip)
         normalized = status.upper()
         if normalized not in {"ACTIVE", "COOLING", "BLOCKED"}:
             raise ValueError("invalid IP state")
@@ -180,6 +190,7 @@ class IpIntelligenceDatabase:
         return dict(row) if row else None
 
     def nodes_for_ip(self, full_ip: str) -> list[str]:
+        full_ip = normalize_full_ip(full_ip)
         with closing(self._connect()) as conn:
             rows = conn.execute(
                 """SELECT node, MAX(id) AS latest FROM node_ip_history

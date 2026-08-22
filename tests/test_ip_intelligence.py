@@ -3,7 +3,7 @@ from pathlib import Path
 import uuid
 
 from app.database import IpIntelligenceDatabase
-from app.full_ip import FullIpCollector, mask_full_ip
+from app.full_ip import FullIpCollector, mask_full_ip, normalize_full_ip
 from app.ip_cluster import build_ip_clusters
 from app.ip_identity import IpIdentityService
 from app.ip_reputation import IpReputationService
@@ -43,6 +43,30 @@ def test_full_ip_collector_rejects_disagreeing_valid_providers():
     result = collector.collect("http://127.0.0.1:7897")
     assert result["ok"] is False
     assert result["error_code"] == "IP_PROVIDER_MISMATCH"
+
+
+def test_full_ip_validation_canonicalizes_ipv6_and_rejects_bad_boundaries():
+    assert normalize_full_ip(" 2001:0db8:0:0::1 ") == "2001:db8::1"
+    assert mask_full_ip("2001:0db8:0:0::1") == "2001:0db8:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx"
+    collector = FullIpCollector(fetcher=lambda *_args: "203.0.113.1")
+    try:
+        collector.collect("http://127.0.0.1:7897", minimum_consensus=4)
+    except ValueError as exc:
+        assert "minimum_consensus" in str(exc)
+    else:
+        raise AssertionError("invalid consensus must be rejected")
+
+
+def test_database_normalizes_full_ip_at_persistence_boundary():
+    database = IpIntelligenceDatabase(database_path())
+    database.observe_ip("Node IPv6", "2001:0db8:0:0::1")
+    assert database.latest_ip_for_node("Node IPv6")["full_ip"] == "2001:db8::1"
+    try:
+        database.observe_ip("Node Invalid", "not-an-ip")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid full_ip must not be persisted")
 
 
 def test_identity_database_tracks_mapping_cluster_and_stability():

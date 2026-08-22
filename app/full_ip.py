@@ -19,6 +19,11 @@ PROVIDERS = (
 )
 
 
+def normalize_full_ip(value: str) -> str:
+    """Validate and canonicalize an IPv4/IPv6 identity before comparison or storage."""
+    return str(ipaddress.ip_address(str(value).strip()))
+
+
 def _default_fetch(url: str, proxy_url: str, timeout: float) -> str:
     proxy = validate_local_http_url(proxy_url, "proxy URL")
     opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
@@ -35,8 +40,7 @@ def _parse_response(provider: str, payload: str) -> tuple[str, str | None]:
         country = value.get("country") if provider == "ipinfo" else None
     else:
         raw_ip = payload
-    address = ipaddress.ip_address(str(raw_ip).strip())
-    return str(address), str(country).upper() if country else None
+    return normalize_full_ip(str(raw_ip)), str(country).upper() if country else None
 
 
 class FullIpCollector:
@@ -47,12 +51,19 @@ class FullIpCollector:
 
     def collect(self, proxy_url: str, *, timeout: float = 6,
                 minimum_consensus: int | None = None) -> dict[str, Any]:
+        proxy = validate_local_http_url(proxy_url, "proxy URL")
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        if not self.providers:
+            raise ValueError("at least one full-IP provider is required")
+        if minimum_consensus is not None and not 1 <= int(minimum_consensus) <= len(self.providers):
+            raise ValueError("minimum_consensus must be between 1 and provider count")
         started = time.perf_counter()
         observations: list[dict[str, Any]] = []
         for provider, url in self.providers:
             try:
                 full_ip, country = _parse_response(
-                    provider, self.fetcher(url, proxy_url, timeout)
+                    provider, self.fetcher(url, proxy, timeout)
                 )
                 observations.append({
                     "provider": provider, "full_ip": full_ip, "country": country
@@ -74,7 +85,7 @@ class FullIpCollector:
         counts = Counter(str(item["full_ip"]) for item in valid)
         full_ip, votes = counts.most_common(1)[0]
         required = (
-            max(1, min(int(minimum_consensus), len(self.providers)))
+            int(minimum_consensus)
             if minimum_consensus is not None
             else (2 if len(valid) > 1 else 1)
         )
@@ -102,7 +113,7 @@ class FullIpCollector:
 def mask_full_ip(value: str | None) -> str | None:
     if not value:
         return None
-    address = ipaddress.ip_address(value)
+    address = ipaddress.ip_address(normalize_full_ip(value))
     if address.version == 4:
         parts = str(address).split(".")
         return ".".join(parts[:2] + ["xxx", "xxx"])

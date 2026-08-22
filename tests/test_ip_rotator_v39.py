@@ -135,3 +135,27 @@ def test_all_failures_restore_original_node():
     assert result["state"] == RotationState.FAILED.value
     assert result["original_restored"] is True
     assert controller.current == "Original"
+
+
+def test_baseline_and_same_egress_are_both_bound_to_nodes():
+    class Identities:
+        def __init__(self):
+            self.observations = []
+            self.database = None
+
+        def observe(self, node, full_ip, *, country=None, node_type=None):
+            self.observations.append((node, full_ip, country, node_type))
+
+    engine = Engine()
+    value, _controller = rotator(Verifier([
+        {"ok": True, "full_ip": "203.0.113.1", "country": "HK"},
+        {"ok": True, "full_ip": "203.0.113.1", "country": "HK"},
+    ]), engine)
+    identities = Identities()
+    value.identity_service = identities
+    result = value.rotate("Proxy", wait_after_switch=0, max_attempts=1)
+    assert result["ok"] is False
+    assert identities.observations == [
+        ("Original", "203.0.113.1", "HK", None),
+        ("A", "203.0.113.1", "HK", "VLESS"),
+    ]

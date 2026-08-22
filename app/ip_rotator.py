@@ -215,6 +215,11 @@ class ClashIpRotator:
         attempted_ips.add(old_full_ip)
         nodes = self.controller.get_real_nodes_v21(group)
         discovered_names = {self._node_name(node) for node in nodes}
+        node_types = {
+            self._node_name(node): node.get("type")
+            for node in nodes
+            if isinstance(node, dict) and self._node_name(node)
+        }
         limit = min(len(nodes), max_attempts or len(nodes))
         try:
             # 恢复时必须保存 Selector 的直接 now；若原值是“自动选择”，只保存其
@@ -227,6 +232,21 @@ class ClashIpRotator:
             original_node = current_selection(group)
         except Exception:
             original_node = None
+        try:
+            original_leaf = self.controller.get_current_node_v21(group)
+        except Exception:
+            original_leaf = None
+        if self.identity_service is not None and original_leaf:
+            try:
+                self.identity_service.observe(
+                    original_leaf,
+                    old_full_ip,
+                    country=old.get("country"),
+                    node_type=node_types.get(original_leaf),
+                )
+            except Exception:
+                # Baseline persistence must not prevent a bounded rotation attempt.
+                pass
 
         while len(attempts) < limit:
             self._set_state(RotationState.ROTATING, rotation_id)
@@ -300,6 +320,17 @@ class ClashIpRotator:
                 self._set_state(RotationState.VERIFYING, rotation_id)
                 verified = self.verifier.verify_change(self.proxy_url, old_full_ip)
                 new_full_ip = verified.get("full_ip")
+                if self.identity_service is not None and new_full_ip:
+                    try:
+                        # Every valid post-switch identity is evidence, including same_egress.
+                        self.identity_service.observe(
+                            name,
+                            str(new_full_ip),
+                            country=verified.get("country"),
+                            node_type=node_types.get(name),
+                        )
+                    except Exception as exc:
+                        attempt["identity_error"] = type(exc).__name__
                 if not verified.get("ok"):
                     reason = verified.get("error_code", "verification_failed")
                     feedback_error = self._feedback(
@@ -328,14 +359,6 @@ class ClashIpRotator:
                     self._set_state(RotationState.COOLING, rotation_id)
                     continue
 
-                if self.identity_service is not None:
-                    try:
-                        self.identity_service.observe(
-                            name, str(new_full_ip), country=verified.get("country"),
-                            node_type=selected_node.get("type") if isinstance(selected_node, dict) else None,
-                        )
-                    except Exception as exc:
-                        attempt["identity_error"] = type(exc).__name__
                 feedback_error = self._feedback(
                     engine, name, "success", full_ip=new_full_ip,
                     group=group, latency_ms=verified.get("latency_ms"),
