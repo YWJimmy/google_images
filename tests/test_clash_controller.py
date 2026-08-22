@@ -54,6 +54,63 @@ def test_current_leaf_resolves_nested_strategy_groups():
     assert ClashController._resolve_current_leaf(proxies, "Auto") == "Node A"
 
 
+class NestedSelectorController(ClashController):
+    def __init__(self):
+        super().__init__("http://127.0.0.1:9097", "test-secret")
+        self.current = "自动选择"
+
+    def _state(self):
+        return {
+            "proxies": {
+                "XFLTD": {
+                    "type": "Selector",
+                    "now": self.current,
+                    "all": ["自动选择", "故障转移", "香港 01", "狮城 03"],
+                },
+                "自动选择": {
+                    "type": "URLTest",
+                    "now": "故障转移",
+                    "all": ["香港 01", "狮城 03"],
+                },
+                "故障转移": {
+                    "type": "Fallback",
+                    "now": "狮城 03",
+                    "all": ["香港 01", "狮城 03"],
+                },
+                "香港 01": {"type": "AnyTLS"},
+                "狮城 03": {"type": "AnyTLS"},
+            }
+        }
+
+    def _request(self, path, method="GET", payload=None, request_timeout=3):
+        if path == "/proxies":
+            return self._state()
+        if path == "/proxies/XFLTD" and method == "GET":
+            return self._state()["proxies"]["XFLTD"]
+        if path == "/proxies/XFLTD" and method == "PUT":
+            self.current = payload["name"]
+            return {}
+        raise AssertionError((path, method, payload))
+
+
+def test_v21_current_node_resolves_nested_groups_but_selection_remains_restorable():
+    controller = NestedSelectorController()
+    assert controller.get_current_selection_v21("XFLTD") == "自动选择"
+    assert controller.get_current_node_v21("XFLTD") == "狮城 03"
+
+
+def test_switch_proxy_uses_original_node_name_and_verifies_direct_selection(monkeypatch):
+    controller = NestedSelectorController()
+    monkeypatch.setattr("app.clash_controller.time.sleep", lambda _seconds: None)
+    result = controller.switch_proxy("XFLTD", "香港 01")
+    assert result == {
+        "ok": True,
+        "requested": "香港 01",
+        "current": "香港 01",
+    }
+    assert controller.get_current_node_v21("XFLTD") == "香港 01"
+
+
 class ProbeController(ClashController):
     def __init__(self):
         super().__init__("http://127.0.0.1:9097", "test-secret")

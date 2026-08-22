@@ -217,7 +217,14 @@ class ClashIpRotator:
         discovered_names = {self._node_name(node) for node in nodes}
         limit = min(len(nodes), max_attempts or len(nodes))
         try:
-            original_node = self.controller.get_current_node_v21(group)
+            # 恢复时必须保存 Selector 的直接 now；若原值是“自动选择”，只保存其
+            # 当前叶子会把自动策略永久改成固定节点。旧测试替身没有新方法时兼容回退。
+            current_selection = getattr(
+                self.controller, "get_current_selection_v21", None
+            )
+            if current_selection is None:
+                current_selection = self.controller.get_current_node_v21
+            original_node = current_selection(group)
         except Exception:
             original_node = None
 

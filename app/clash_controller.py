@@ -423,15 +423,37 @@ def get_current_node_v21(
 
     """
     v2.1新增：
-    获取Selector当前真实选择名称。
-    """
-    data = self._request(
-        f"/proxies/{quote(group, safe='')}"
-    )
+    获取 Selector 当前最终落地的真实节点名称。
 
-    return str(
-        data.get("now", "")
-    )
+    Selector 的 ``now`` 可能是“自动选择”或“故障转移”等嵌套代理组；
+    本方法继续沿各组的 ``now`` 解析，直到得到真实叶子节点。
+    """
+    state = self._proxy_state()
+    selector = state.get(group)
+    if not selector or str(selector.get("type", "")) != "Selector":
+        raise ValueError("unknown Selector group")
+    return self._resolve_current_leaf(state, str(selector.get("now", "")))
+
+
+def get_current_selection_v21(
+    self,
+    group: str = "GLOBAL"
+) -> str:
+    """返回 Selector 的直接 ``now``，用于完整恢复自动选择等原始策略。"""
+    data = self._request(f"/proxies/{quote(group, safe='')}")
+    if str(data.get("type", "")) != "Selector":
+        raise ValueError("unknown Selector group")
+    return str(data.get("now", ""))
+
+
+def switch_proxy(
+    self,
+    group: str,
+    node: str,
+    wait: float = 1.5,
+) -> dict:
+    """使用 Clash 原始节点名切换 Selector，并验证其直接选择已生效。"""
+    return self.switch_and_verify_v21(group, node, wait=wait)
 
 
 def switch_and_verify_v21(
@@ -459,7 +481,7 @@ def switch_and_verify_v21(
 
     time.sleep(wait)
 
-    current = self.get_current_node_v21(
+    current = self.get_current_selection_v21(
         group
     )
 
@@ -476,4 +498,6 @@ def switch_and_verify_v21(
 ClashController.get_proxy_detail_v21 = get_proxy_detail_v21
 ClashController.get_real_nodes_v21 = get_real_nodes_v21
 ClashController.get_current_node_v21 = get_current_node_v21
+ClashController.get_current_selection_v21 = get_current_selection_v21
+ClashController.switch_proxy = switch_proxy
 ClashController.switch_and_verify_v21 = switch_and_verify_v21

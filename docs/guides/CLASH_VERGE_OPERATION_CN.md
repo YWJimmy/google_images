@@ -88,6 +88,72 @@ Invoke-RestMethod `
 
 切换后重新查询出口 IP，并确认目标网站可以正常访问。若连通性异常，应手工切回原节点。
 
+### XFLTD 四步人工验证链
+
+以下测试使用 Controller 返回的原始节点名。测试前同时保存 Selector 的直接选择项，
+以便结束时恢复“自动选择”等原策略；终端和报告只输出脱敏 IP。
+
+#### Step 1：读取 XFLTD 当前真实节点
+
+```python
+current = controller.get_current_node_v21("XFLTD")
+print(current)
+```
+
+即使 `XFLTD` 的直接 `now` 是 `自动选择`，这里也应递归解析并输出最终叶子，例如
+`🇸🇬 狮城 03 [D]`。需要记录直接选择项用于恢复时，另调用
+`controller.get_current_selection_v21("XFLTD")`。
+
+#### Step 2：读取 XFLTD 真实节点池
+
+```python
+nodes = controller.get_real_nodes_v21("XFLTD")
+print(nodes[:5])
+```
+
+结果只含真实出口，不含 `DIRECT`、`REJECT`、`自动选择`或`故障转移`：
+
+```json
+[
+  {"clash_name": "🇭🇰 香港 01 [D]", "type": "AnyTLS"},
+  {"clash_name": "🇭🇰 香港 02 [D]", "type": "AnyTLS"}
+]
+```
+
+#### Step 3：切换 XFLTD
+
+目标必须来自 Step 2，且必须与 Step 1 不同：
+
+```python
+switched = controller.switch_proxy("XFLTD", "🇭🇰 香港 01 [D]")
+assert switched["ok"]
+assert controller.get_current_node_v21("XFLTD") == "🇭🇰 香港 01 [D]"
+```
+
+#### Step 4：采集并比较 full_ip
+
+```python
+before = collector.collect(proxy_url)
+controller.switch_proxy("XFLTD", target)
+after = collector.collect(proxy_url)
+
+assert before["ok"] and after["ok"]
+assert before["full_ip"] != after["full_ip"]
+```
+
+完整 IP 只在内存中参与比较；展示和记录使用 `mask_full_ip()`。测试必须在 `finally`
+中切回 Step 1 前保存的直接选择项，并再次确认恢复成功。
+
+#### 2026-08-22 实机查验结果
+
+- 初始直接选择：`自动选择`；最终叶子：`🇭🇰 香港 01 [D]`；
+- 节点池：58 个真实节点，`[D]` 为 `AnyTLS`、`[V]` 为 `Vless`；
+- 测试目标：`🇸🇬 狮城 03 [D]`，切换前探测延迟 97 ms；
+- 切换前出口：`89.185.xxx.xxx`（HK，3/3 服务一致）；
+- 切换后出口：`50.7.xxx.xxx`（SG，3/3 服务一致）；
+- 两次完整 IP 指纹不同，证明节点和公网出口均已改变；
+- 测试结束后已恢复直接选择 `自动选择`，最终叶子回到 `🇭🇰 香港 01 [D]`。
+
 ## 5. 节点可用性与延迟采集
 
 控制台“可用节点延迟采集”会读取当前 Selector 组，并递归展开其中的实际代理节点。每个节点通过 Mihomo 的 `/proxies/{name}/delay` 接口访问固定的 `generate_204` 探测地址：
